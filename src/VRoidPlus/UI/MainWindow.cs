@@ -133,9 +133,29 @@ namespace VRoidPlus
         private void EnsureStyles()
         {
             if (_wrap != null) return;
-            _wrap = new GUIStyle(GUI.skin.label) { wordWrap = true };
-            _title = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold };
-            _small = new GUIStyle(GUI.skin.label) { wordWrap = true, fontSize = 11 };
+            _wrap = LabelStyle(); _wrap.wordWrap = true;
+            _title = LabelStyle(); _title.fontStyle = FontStyle.Bold;
+            _small = LabelStyle(); _small.wordWrap = true; _small.fontSize = 11;
+        }
+
+        /// <summary>
+        /// A copy of the default label style. VRoid's Unity build has GUIStyle's copy constructor stripped,
+        /// so the style is built from an empty one and the relevant settings are copied over.
+        /// </summary>
+        private static GUIStyle LabelStyle()
+        {
+            var src = GUI.skin.label;
+            var s = new GUIStyle();
+            s.font = src.font;
+            s.fontSize = src.fontSize;
+            s.alignment = src.alignment;
+            s.richText = src.richText;
+            s.clipping = src.clipping;
+            s.margin = src.margin;
+            s.padding = src.padding;
+            s.normal.textColor = src.normal.textColor;
+            s.hover.textColor = src.normal.textColor;
+            return s;
         }
 
         private void DrawTabs()
