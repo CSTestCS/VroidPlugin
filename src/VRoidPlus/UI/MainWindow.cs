@@ -73,6 +73,7 @@ namespace VRoidPlus
             _scroll = Mathf.Clamp(_scroll, 0, Mathf.Max(0, _contentHeight - view.height));
 
             Ui.Begin(view, _scroll);
+            DrawDiagnosticsBanner();
             if (_picker != null) DrawBonePicker();
             else
             {
@@ -201,6 +202,27 @@ namespace VRoidPlus
         }
 
         private static void Status(string s) { if (!string.IsNullOrEmpty(s)) { Ui.Space(4); Text(">> " + s); } }
+
+        // ------------------------------------------------------------------ diagnostics
+
+        private string _diagStatus;
+        private bool _diagHide;
+
+        private void DrawDiagnosticsBanner()
+        {
+            if (_diagHide) return;
+            Ui.Label("Help fit VRoid Plus to your VRoid: open a model (with at least one accessory), open the Hairstyle editor, then press the button below. It saves a ZIP on your Desktop to send to the developer. It only reads; nothing in VRoid is changed.", Ui.Small);
+            Ui.BeginRow(0);
+            if (Ui.Button("Save diagnostics ZIP", 170))
+            {
+                try { _diagStatus = "Saved: " + Diagnostics.Capture(); }
+                catch (Exception ex) { _diagStatus = "Failed: " + ex.Message; Plugin.Logger.LogError(ex); }
+            }
+            if (Ui.Button("Hide", 60)) _diagHide = true;
+            Ui.EndRow();
+            Status(_diagStatus);
+            Ui.Space(8);
+        }
 
         // ------------------------------------------------------------------ tabs
 

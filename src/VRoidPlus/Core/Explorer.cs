@@ -91,6 +91,7 @@ namespace VRoidPlus
             public string Name, Type, Value;
             public bool Expandable;
             public bool IsList;
+            public object Obj; // the live value (for recursive dumps)
         }
 
         /// <summary>Members of a live object, for the browser.</summary>
@@ -105,7 +106,7 @@ namespace VRoidPlus
                 for (int i = 0; i < Math.Min(n, max); i++)
                 {
                     object v; try { v = ListAccess.Get(obj, i); } catch (Exception e) { v = "<" + e.Message + ">"; }
-                    rows.Add(new Row { Name = $"[{i}]", Type = v?.GetType().Name ?? "null", Value = Preview(v), Expandable = v != null && !ObjectSnapshot.IsSimple(v.GetType()) });
+                    rows.Add(new Row { Name = $"[{i}]", Obj = v, Type = v?.GetType().Name ?? "null", Value = Preview(v), Expandable = v != null && !ObjectSnapshot.IsSimple(v.GetType()) });
                 }
                 return rows;
             }
@@ -116,7 +117,7 @@ namespace VRoidPlus
                 rows.Add(new Row
                 {
                     Name = m.Name, Type = Short(m.Type) + (m.CanWrite ? "" : " (read-only)"), Value = val,
-                    Expandable = v != null && !ObjectSnapshot.IsSimple(v.GetType()), IsList = v != null && ListAccess.IsList(v),
+                    Obj = v, Expandable = v != null && !ObjectSnapshot.IsSimple(v.GetType()), IsList = v != null && ListAccess.IsList(v),
                 });
             }
             return rows;

@@ -41,6 +41,10 @@ namespace VRoidPlus
 
         public void MarkDirty() => _dirty = true;
 
+        /// <summary>What the last pass did, for diagnostics.</summary>
+        public string LastInfo = "not run yet";
+        public int Overwritten, Applied;
+
         public bool AllDefault =>
             Mathf.Approximately(Settings.Current.BicepSize, 1) && Mathf.Approximately(Settings.Current.ForearmSize, 1) &&
             Mathf.Approximately(Settings.Current.ThighSize, 1) && Mathf.Approximately(Settings.Current.CalfSize, 1);
@@ -53,15 +57,19 @@ namespace VRoidPlus
             if (!Avatar.Found) return;
             if (AllDefault && _states.Count == 0) return;
 
+            int seen = 0, unreadable = 0, noMesh = 0;
             var key = $"{Settings.Current.BicepSize:F3}|{Settings.Current.ForearmSize:F3}|{Settings.Current.ThighSize:F3}|{Settings.Current.CalfSize:F3}";
             foreach (var r in Avatar.Renderers())
             {
                 var smr = Compat.As<SkinnedMeshRenderer>(r);
                 if (smr == null) continue;
                 var mesh = smr.sharedMesh;
-                if (mesh == null || !mesh.isReadable) continue;
+                seen++;
+                if (mesh == null) { noMesh++; continue; }
+                if (!mesh.isReadable) { unreadable++; continue; }
                 Process(smr, mesh, key);
             }
+            LastInfo = $"{Time.unscaledTime:F0}s: {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, key {key}";
         }
 
         private void Process(SkinnedMeshRenderer smr, Mesh mesh, string key)
@@ -84,6 +92,7 @@ namespace VRoidPlus
             var current = Copy.Vertices(mesh);
             if (!_states.TryGetValue(id, out var st) || st.Mesh != mesh || st.Original.Length != current.Length || !SameAs(current, st.Written))
             {
+                if (st != null && st.Written != null) Overwritten++; // VRoid replaced what we wrote
                 // New mesh, or VRoid regenerated it: what's there now is the new original.
                 st = new MeshState { Mesh = mesh, Original = current, Key = "" };
                 _states[id] = st;
@@ -127,6 +136,7 @@ namespace VRoidPlus
             mesh.RecalculateBounds();
             st.Written = Copy.Vertices(mesh);
             st.Key = key;
+            Applied++;
         }
 
         private static Vector3 Push(Vector3 meshPos, int bi, float w, Vector3[] axis, float[] factor,
