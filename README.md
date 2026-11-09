@@ -29,9 +29,13 @@ The installer does everything else:
 - Downloads a private copy of the .NET build tools (about 200 MB, only the first time; no admin rights needed).
 - Builds VRoid Plus for *your* exact VRoid version and puts it in place.
 
-Then start VRoid Studio from Steam as usual and press **F8**, or click **VRoid+** in the bottom-left corner.
+- Starts VRoid Studio and checks that VRoid Plus loaded, then tells you whether it worked.
+
+After that, start VRoid Studio from Steam as usual. To open VRoid Plus, click **VRoid+** in the bottom-left corner or press **Ctrl+Shift+V**. You can change the shortcut in the *Setup* tab.
 
 **After a VRoid Studio update**, if VRoid Plus stops working, run `Install-VRoidPlus.bat` again.
+
+**If something goes wrong**, the installer says so and keeps its window open. Send `%LOCALAPPDATA%\VRoidPlus\install-log.txt` and `%LOCALAPPDATA%\VRoidPlus\BepInEx-LogOutput.log`; you can paste these paths into the File Explorer address bar.
 
 **To uninstall**, run `Uninstall-VRoidPlus.bat`. It removes the plugin, and optionally BepInEx too. Your saved face sets and hair library are backed up to `Documents\VRoidPlus-backup`.
 

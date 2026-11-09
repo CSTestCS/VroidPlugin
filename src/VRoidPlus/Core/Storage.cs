@@ -63,7 +63,9 @@ namespace VRoidPlus
 
     public class SettingsData
     {
-        public string ToggleKey = "F8";
+        /// <summary>Shortcut that opens/closes the window, e.g. "Ctrl+Shift+V". F8 is avoided: VRoid uses it.</summary>
+        public string ToggleKey = Hotkey.Default;
+        public int SettingsVersion = 0; // 0 = file from before versioning (or none); Load() upgrades it
         public bool ShowControllerDefaultOff = true;
         public string[] ShowControllerLabels =
         {
@@ -83,10 +85,55 @@ namespace VRoidPlus
     {
         public static SettingsData Current = new();
         private static string FilePath => Path.Combine(Plugin.DataDir, "settings.json");
-        public static void Load() => Current = Json.Read<SettingsData>(FilePath);
+        public static void Load()
+        {
+            Current = Json.Read<SettingsData>(FilePath);
+            // Version 1 defaulted to F8, which clashes with a VRoid shortcut.
+            if (Current.SettingsVersion < 2)
+            {
+                if (string.Equals(Current.ToggleKey, "F8", StringComparison.OrdinalIgnoreCase)) Current.ToggleKey = Hotkey.Default;
+                Current.SettingsVersion = 2;
+                Save();
+            }
+            if (!Hotkey.TryParse(Current.ToggleKey, out _)) Current.ToggleKey = Hotkey.Default;
+        }
         public static void Save() => Safe.Run("Settings.Save", () => Json.Write(FilePath, Current));
 
-        public static KeyCode ToggleKeyCode =>
-            Enum.TryParse<KeyCode>(Current.ToggleKey, true, out var k) ? k : KeyCode.F8;
+        public static Hotkey Toggle => Hotkey.TryParse(Current.ToggleKey, out var h) ? h : Hotkey.Parse(Hotkey.Default);
+    }
+
+    /// <summary>A key plus optional Ctrl/Shift/Alt, written like "Ctrl+Shift+V".</summary>
+    internal struct Hotkey
+    {
+        public const string Default = "Ctrl+Shift+V";
+        public KeyCode Key;
+        public bool Ctrl, Shift, Alt;
+
+        public static Hotkey Parse(string s) => TryParse(s, out var h) ? h : new Hotkey { Key = KeyCode.V, Ctrl = true, Shift = true };
+
+        public static bool TryParse(string s, out Hotkey h)
+        {
+            h = default;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            foreach (var raw in s.Split('+'))
+            {
+                var part = raw.Trim();
+                if (part.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || part.Equals("Control", StringComparison.OrdinalIgnoreCase)) h.Ctrl = true;
+                else if (part.Equals("Shift", StringComparison.OrdinalIgnoreCase)) h.Shift = true;
+                else if (part.Equals("Alt", StringComparison.OrdinalIgnoreCase)) h.Alt = true;
+                else if (Enum.TryParse<KeyCode>(part, true, out var k) && k != KeyCode.None) h.Key = k;
+                else return false;
+            }
+            return h.Key != KeyCode.None;
+        }
+
+        public bool Matches(Event e) =>
+            e != null && e.type == EventType.KeyDown && e.keyCode == Key && e.control == Ctrl && e.shift == Shift && e.alt == Alt;
+
+        public static bool IsModifier(KeyCode k) =>
+            k == KeyCode.LeftControl || k == KeyCode.RightControl || k == KeyCode.LeftShift || k == KeyCode.RightShift ||
+            k == KeyCode.LeftAlt || k == KeyCode.RightAlt || k == KeyCode.LeftCommand || k == KeyCode.RightCommand;
+
+        public override string ToString() => (Ctrl ? "Ctrl+" : "") + (Shift ? "Shift+" : "") + (Alt ? "Alt+" : "") + Key;
     }
 }

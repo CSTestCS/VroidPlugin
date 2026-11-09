@@ -5,14 +5,14 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'find-vroid.ps1')
 if (-not $GameDir) { $GameDir = Find-VRoid }
 if (-not $GameDir) {
-    Add-Type -AssemblyName System.Windows.Forms
-    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = "Select the VRoid Studio folder"
-    if ($dlg.ShowDialog() -ne 'OK') { exit 1 }
-    $GameDir = $dlg.SelectedPath
+    Write-Host "Choose the VRoid Studio folder in the window that opened (check the taskbar if you don't see it)." -ForegroundColor Yellow
+    $GameDir = Select-VRoidFolder "Select the VRoid Studio folder"
+    if (-not $GameDir) { exit 1 }
 }
 $GameDir = $GameDir.TrimEnd('\')
-if (Get-Process -Name 'VRoidStudio' -ErrorAction SilentlyContinue) {
+$exe = Get-VRoidExe $GameDir
+$procName = if ($exe) { [IO.Path]::GetFileNameWithoutExtension($exe) } else { 'VRoidStudio' }
+if (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
     Write-Host "Please close VRoid Studio first, then press Enter." -ForegroundColor Yellow; Read-Host | Out-Null
 }
 

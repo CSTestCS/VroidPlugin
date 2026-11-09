@@ -34,7 +34,18 @@ namespace VRoidPlus
         public void OnGUI()
         {
             var e = Event.current;
-            if (e != null && e.type == EventType.KeyDown && e.keyCode == Settings.ToggleKeyCode) { SetOpen(!_open); e.Use(); }
+            if (_recordingKey && e != null && e.type == EventType.KeyDown && e.keyCode != KeyCode.None && !Hotkey.IsModifier(e.keyCode))
+            {
+                if (e.keyCode != KeyCode.Escape)
+                {
+                    var h = new Hotkey { Key = e.keyCode, Ctrl = e.control, Shift = e.shift, Alt = e.alt };
+                    Settings.Current.ToggleKey = h.ToString();
+                    Settings.Save();
+                }
+                _recordingKey = false;
+                e.Use();
+            }
+            else if (Settings.Toggle.Matches(e) && GUIUtility.keyboardControl == 0) { SetOpen(!_open); e.Use(); }
 
             EnsureStyles();
             var launcher = new Rect(6, Screen.height - 30, 84, 24);
@@ -341,9 +352,19 @@ namespace VRoidPlus
         private List<string> _candidates;
         private string _setupStatus;
 
+        private bool _recordingKey;
+
         private void DrawSetup()
         {
             var m = Mapping.Current;
+            Header("Shortcut");
+            GUILayout.BeginHorizontal(None);
+            GUILayout.Label("Open/close VRoid Plus:", new[] { GUILayout.Width(150) });
+            GUILayout.Label(_recordingKey ? "press the new keys... (Esc cancels)" : Settings.Current.ToggleKey, None);
+            if (!_recordingKey && Button("Change...", 80)) { _recordingKey = true; GUIUtility.keyboardControl = 0; }
+            if (!_recordingKey && Button("Default", 60)) { Settings.Current.ToggleKey = Hotkey.Default; Settings.Save(); }
+            GUILayout.EndHorizontal();
+
             Text("Body sliders, anchors and FBX poses work on their own. Face sets and hair merging edit VRoid's internal data, whose names differ between VRoid versions; they are set here (saved in mapping.json).");
 
             Header("Connections");

@@ -6,3 +6,4 @@ if not exist "%~dp0src\VRoidPlus\VRoidPlus.csproj" (
   exit /b 1
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\install.ps1" %*
+if errorlevel 1 pause
