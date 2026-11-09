@@ -175,6 +175,8 @@ namespace VRoidPlus
 
         private static void DrawLabel(Rect r, string text, GUIStyle style)
         {
+            // Small inset instead of style padding (RectOffset's constructor is stripped in VRoid's build).
+            r = new Rect(r.x + 2, r.y + 2, r.width - 4, r.height - 2);
             if (style != null && _labelStyledOk)
             {
                 try { GUI.Label(r, text, style); return; }
@@ -236,7 +238,6 @@ namespace VRoidPlus
             var s = new GUIStyle();
             s.normal.textColor = new Color(0.92f, 0.92f, 0.92f);
             s.fontSize = 13;
-            s.padding = new RectOffset(2, 2, 2, 2);
             try { s.font = GUI.skin.label.font; } catch { }
             return s;
         }
