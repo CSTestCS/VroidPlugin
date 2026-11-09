@@ -1,0 +1,12 @@
+name: check-build
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      # Compiles against public Unity/BepInEx references (no game needed) to catch errors.
+      - run: dotnet build src/VRoidPlus/VRoidPlus.csproj -c Release

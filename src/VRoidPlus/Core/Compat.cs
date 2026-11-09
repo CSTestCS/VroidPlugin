@@ -1,0 +1,173 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using Object = UnityEngine.Object;
+#if IL2CPP
+using Il2CppInterop.Runtime;
+using Il2CppInterop.Runtime.InteropTypes;
+#endif
+
+namespace VRoidPlus
+{
+    /// <summary>
+    /// Everything that differs between IL2CPP (the real game) and a normal Mono Unity build
+    /// is kept in this file, so the rest of the plugin is plain Unity code.
+    /// </summary>
+    internal static class Compat
+    {
+        /// <summary>Safe downcast of a Unity object ("is"/"as" don't work on IL2CPP wrappers).</summary>
+        public static T As<T>(Object o) where T : Object
+        {
+            if (o == null) return null;
+#if IL2CPP
+            return o.TryCast<T>();
+#else
+            return o as T;
+#endif
+        }
+
+        /// <summary>Finds every live Unity object whose IL2CPP type is <paramref name="assemblyQualifiedName"/>.</summary>
+        public static List<Component> FindComponentsByTypeName(string assemblyQualifiedName)
+        {
+            var result = new List<Component>();
+#if IL2CPP
+            var t = Il2CppSystem.Type.GetType(assemblyQualifiedName);
+            if (t == null) return result;
+            var arr = Object.FindObjectsOfType(t);
+            if (arr == null) return result;
+            foreach (var o in arr)
+            {
+                var c = o?.TryCast<Component>();
+                if (c != null) result.Add(c);
+            }
+#else
+            var t = Type.GetType(assemblyQualifiedName);
+            if (t == null) return result;
+            foreach (var o in Object.FindObjectsOfType(t))
+                if (o is Component c) result.Add(c);
+#endif
+            return result;
+        }
+
+        /// <summary>Full name of the object's real (most derived) game type.</summary>
+        public static string RealTypeName(Object o)
+        {
+            if (o == null) return "";
+#if IL2CPP
+            return o.GetIl2CppType().FullName;
+#else
+            return o.GetType().FullName;
+#endif
+        }
+
+        /// <summary>Reads a property from the real game type as a string (works for TextMeshPro etc. without referencing them).</summary>
+        public static string GetPropertyAsString(Object o, string property)
+        {
+            if (o == null) return null;
+            try
+            {
+#if IL2CPP
+                var p = o.GetIl2CppType().GetProperty(property);
+                if (p == null) return null;
+                var v = p.GetValue(o, null);
+                return v?.ToString();
+#else
+                var p = o.GetType().GetProperty(property);
+                return p?.GetValue(o)?.ToString();
+#endif
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Visible text on a UI element: looks at Text and TextMeshPro children.</summary>
+        public static string GetLabelText(Component c)
+        {
+            var parts = new List<string>();
+            foreach (var child in c.GetComponentsInChildren<Component>(true))
+            {
+                if (child == null) continue;
+                var tn = RealTypeName(child);
+                if (tn == "UnityEngine.UI.Text" || tn.StartsWith("TMPro.TextMeshPro", StringComparison.Ordinal))
+                {
+                    var s = GetPropertyAsString(child, "text");
+                    if (!string.IsNullOrEmpty(s)) parts.Add(s);
+                }
+            }
+            return string.Join(" ", parts);
+        }
+
+        /// <summary>
+        /// Turns a uGUI Toggle off (fires its normal onValueChanged so VRoid reacts as if the user clicked it).
+        /// Returns false if it could not be done.
+        /// </summary>
+        public static bool TrySetToggle(Component toggle, bool value, out bool previous)
+        {
+            previous = false;
+#if IL2CPP && HAS_UGUI
+            var t = toggle.TryCast<UnityEngine.UI.Toggle>();
+            if (t == null) return false;
+            previous = t.isOn;
+            if (t.isOn != value) t.isOn = value;
+            return true;
+#else
+            var p = toggle.GetType().GetProperty("isOn");
+            if (p == null) return false;
+            previous = (bool)p.GetValue(toggle);
+            if (previous != value) p.SetValue(toggle, value);
+            return true;
+#endif
+        }
+
+        /// <summary>FindObjectOfType for a type only known at runtime through reflection (an interop wrapper type).</summary>
+        public static object FindObjectOfManagedType(Type managedType)
+        {
+#if IL2CPP
+            var il2cppType = Il2CppType.From(managedType, false);
+            if (il2cppType == null) return null;
+            var found = Object.FindObjectOfType(il2cppType);
+            if (found == null) return null;
+            return CastTo(found, managedType);
+#else
+            return Object.FindObjectOfType(managedType);
+#endif
+        }
+
+        /// <summary>Casts an interop object to a more specific interop type (no-op outside IL2CPP).</summary>
+        public static object CastTo(object obj, Type target)
+        {
+            if (obj == null || target.IsInstanceOfType(obj)) return obj;
+#if IL2CPP
+            if (obj is Il2CppObjectBase b)
+            {
+                var m = typeof(Il2CppObjectBase).GetMethod("TryCast")?.MakeGenericMethod(target);
+                return m?.Invoke(b, null);
+            }
+#endif
+            return null;
+        }
+
+        /// <summary>
+        /// Identity of an object that survives re-wrapping: interop creates a new managed wrapper each time
+        /// the same native object is fetched, so reference equality is not enough.
+        /// </summary>
+        public static object Identity(object o)
+        {
+#if IL2CPP
+            if (o is Il2CppObjectBase b) return b.Pointer;
+#endif
+            return o;
+        }
+
+        /// <summary>Whether a managed type is part of the interop/runtime plumbing rather than game data.</summary>
+        public static bool IsPlumbingType(Type t)
+        {
+            if (t == null) return true;
+            var ns = t.Namespace ?? "";
+#if IL2CPP
+            if (t == typeof(Il2CppObjectBase)) return true;
+            if (ns.StartsWith("Il2CppInterop", StringComparison.Ordinal)) return true;
+#endif
+            return t == typeof(object) || ns == "Il2CppSystem" && t.Name == "Object";
+        }
+    }
+}
