@@ -4,15 +4,17 @@ $SteamAppId = '1486350'
 # The VRoid program inside a folder: VRoidStudio.exe, or any Unity .exe that has a matching <name>_Data folder.
 function Get-VRoidExe([string]$dir) {
     if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { return $null }
-    $preferred = Join-Path $dir 'VRoidStudio.exe'
+    $preferred = [IO.Path]::Combine($dir, 'VRoidStudio.exe')
     if (Test-Path -LiteralPath $preferred) { return $preferred }
     foreach ($exe in (Get-ChildItem -LiteralPath $dir -Filter '*.exe' -File -ErrorAction SilentlyContinue)) {
         if ($exe.Name -match 'UnityCrashHandler|unins|setup') { continue }
-        if (Test-Path -LiteralPath (Join-Path $dir ($exe.BaseName + '_Data'))) { return $exe.FullName }
+        if (Test-Path -LiteralPath ([IO.Path]::Combine($dir, ($exe.BaseName + '_Data')))) { return $exe.FullName }
     }
     return $null
 }
 
+# Note: [IO.Path]::Combine is used instead of Join-Path because Join-Path fails on drives
+# that don't exist (e.g. a Steam library on an unplugged disk).
 function Find-VRoid {
     $candidates = New-Object System.Collections.Generic.List[string]
     $steam = $null
@@ -25,7 +27,7 @@ function Find-VRoid {
     if ($steam) {
         $steam = $steam -replace '/', '\'
         $libs.Add($steam)
-        $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+        $vdf = [IO.Path]::Combine($steam, 'steamapps\libraryfolders.vdf')
         if (Test-Path -LiteralPath $vdf) {
             foreach ($m in (Select-String -LiteralPath $vdf -Pattern '"path"\s+"([^"]+)"' -AllMatches)) {
                 foreach ($mm in $m.Matches) { $libs.Add(($mm.Groups[1].Value -replace '\\\\', '\')) }
@@ -35,19 +37,20 @@ function Find-VRoid {
     # Common library locations, in case the registry/vdf lookup fails.
     foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
         foreach ($sub in 'SteamLibrary', 'Steam', 'Program Files (x86)\Steam', 'Program Files\Steam', 'Games\Steam', 'Games\SteamLibrary') {
-            $libs.Add((Join-Path $drive.Root $sub))
+            $libs.Add(([IO.Path]::Combine($drive.Root, $sub)))
         }
     }
     foreach ($lib in ($libs | Select-Object -Unique)) {
-        $acf = Join-Path $lib "steamapps\appmanifest_$SteamAppId.acf"
+        try { if (-not (Test-Path -LiteralPath $lib)) { continue } } catch { continue }
+        $acf = [IO.Path]::Combine($lib, "steamapps\appmanifest_$SteamAppId.acf")
         if (Test-Path -LiteralPath $acf) {
             $m = Select-String -LiteralPath $acf -Pattern '"installdir"\s+"([^"]+)"' | Select-Object -First 1
-            if ($m) { $candidates.Add((Join-Path $lib ("steamapps\common\" + $m.Matches[0].Groups[1].Value))) }
+            if ($m) { $candidates.Add(([IO.Path]::Combine($lib, ("steamapps\common\" + $m.Matches[0].Groups[1].Value)))) }
         }
-        $candidates.Add((Join-Path $lib 'steamapps\common\VRoid Studio'))
-        $candidates.Add((Join-Path $lib 'steamapps\common\VRoidStudio'))
+        $candidates.Add(([IO.Path]::Combine($lib, 'steamapps\common\VRoid Studio')))
+        $candidates.Add(([IO.Path]::Combine($lib, 'steamapps\common\VRoidStudio')))
     }
-    foreach ($c in $candidates) { if (Get-VRoidExe $c) { return $c } }
+    foreach ($c in $candidates) { try { if (Get-VRoidExe $c) { return $c } } catch { } }
     return $null
 }
 
