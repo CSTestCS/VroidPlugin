@@ -1,32 +1,31 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using UnityEngine;
 
 namespace VRoidPlus
 {
     /// <summary>
-    /// The VRoid Plus window. Plain IMGUI drawn on top of VRoid's own UI: no dependency on VRoid's UI code,
-    /// so it keeps working across VRoid updates.
+    /// The VRoid Plus window, drawn on top of VRoid's own UI with the Ui helper (explicit rectangles,
+    /// no GUILayout: VRoid's Unity build has most of GUILayout stripped). Plain ASCII labels are used
+    /// because Unity's built-in font has few symbols.
     /// </summary>
     internal class MainWindow
     {
         private bool _open;
         private Rect _rect;
-        private bool _dragging;
+        private bool _dragging, _resizing;
         private Vector2 _dragOffset;
         private int _tab;
-        private Vector2 _scroll;
+        private float _scroll, _contentHeight;
         private readonly string[] _tabs = { "Face Sets", "Hair Merge", "Hair Anchors", "Body", "Accessories", "Pose", "Setup" };
 
-        private GUIStyle _wrap, _title, _small;
-        private static readonly GUILayoutOption[] None = new GUILayoutOption[0];
+        private const float TitleH = 24f, TabRowH = 24f, Pad = 8f;
 
         public MainWindow()
         {
             var s = Settings.Current;
-            _rect = new Rect(s.WindowX, s.WindowY, s.WindowW, s.WindowH);
+            _rect = new Rect(s.WindowX, s.WindowY, Mathf.Max(380, s.WindowW), Mathf.Max(300, s.WindowH));
         }
 
         // ------------------------------------------------------------------ frame
@@ -34,39 +33,46 @@ namespace VRoidPlus
         public void OnGUI()
         {
             var e = Event.current;
-            if (_recordingKey && e != null && e.type == EventType.KeyDown && e.keyCode != KeyCode.None && !Hotkey.IsModifier(e.keyCode))
-            {
-                if (e.keyCode != KeyCode.Escape)
-                {
-                    var h = new Hotkey { Key = e.keyCode, Ctrl = e.control, Shift = e.shift, Alt = e.alt };
-                    Settings.Current.ToggleKey = h.ToString();
-                    Settings.Save();
-                }
-                _recordingKey = false;
-                e.Use();
-            }
-            else if (Settings.Toggle.Matches(e) && GUIUtility.keyboardControl == 0) { SetOpen(!_open); e.Use(); }
+            HandleHotkeys(e);
 
-            EnsureStyles();
             var launcher = new Rect(6, Screen.height - 30, 84, 24);
-            if (GUI.Button(launcher, _open ? "VRoid+ ✕" : "VRoid+")) SetOpen(!_open);
+            if (GUI.Button(launcher, _open ? "VRoid+ [x]" : "VRoid+")) SetOpen(!_open);
             if (!_open) { BlockVRoidInput(false); return; }
 
-            HandleDrag(e);
+            HandleDragAndResize(e);
+            _rect.width = Mathf.Clamp(_rect.width, 380, Mathf.Max(380, Screen.width - 10));
+            _rect.height = Mathf.Clamp(_rect.height, 300, Mathf.Max(300, Screen.height - 10));
             _rect.x = Mathf.Clamp(_rect.x, 0, Mathf.Max(0, Screen.width - 80));
             _rect.y = Mathf.Clamp(_rect.y, 0, Mathf.Max(0, Screen.height - 40));
-            _rect.height = Mathf.Min(_rect.height, Screen.height - _rect.y);
+            bool mouseOver = e != null && _rect.Contains(e.mousePosition);
+            BlockVRoidInput(mouseOver);
 
-            BlockVRoidInput(e != null && _rect.Contains(e.mousePosition));
+            Ui.Panel(_rect);
 
-            GUI.Box(_rect, "");
-            GUI.Box(_rect, "");          // drawn twice: the default skin is quite transparent
-            GUILayout.BeginArea(new Rect(_rect.x + 8, _rect.y + 6, _rect.width - 16, _rect.height - 12));
-            GUILayout.Label($"VRoid Plus {Plugin.Version}   ({Settings.Current.ToggleKey} to hide, drag here to move)", _title, None);
+            // Title bar (drag area) and close button.
+            var title = new Rect(_rect.x + Pad, _rect.y + 2, _rect.width - 2 * Pad - 30, TitleH);
+            Ui.Begin(title, 0);
+            Ui.Label($"VRoid Plus {Plugin.Version}  -  {Settings.Current.ToggleKey} to hide, drag here to move", Ui.Bold);
+            Ui.End();
+            if (GUI.Button(new Rect(_rect.xMax - Pad - 26, _rect.y + 3, 26, 20), "x")) { SetOpen(false); return; }
 
-            DrawTabs();
-            GUILayout.Space(4);
-            _scroll = GUILayout.BeginScrollView(_scroll, None);
+            // Tabs: two rows of buttons.
+            float tabY = _rect.y + TitleH + 4;
+            float tabW = (_rect.width - 2 * Pad - 3 * 3) / 4f;
+            for (int i = 0; i < _tabs.Length; i++)
+            {
+                int row = i / 4, col = i % 4;
+                var r = new Rect(_rect.x + Pad + col * (tabW + 3), tabY + row * (TabRowH + 3), tabW, TabRowH);
+                if (GUI.Button(r, i == _tab ? "> " + _tabs[i] + " <" : _tabs[i])) { _tab = i; _picker = null; _scroll = 0; }
+            }
+
+            // Scrollable content.
+            float top = tabY + 2 * (TabRowH + 3) + 6;
+            var view = new Rect(_rect.x + Pad, top, _rect.width - 2 * Pad - 14, _rect.yMax - top - Pad);
+            if (mouseOver && e.type == EventType.ScrollWheel) { _scroll += e.delta.y * 24f; e.Use(); }
+            _scroll = Mathf.Clamp(_scroll, 0, Mathf.Max(0, _contentHeight - view.height));
+
+            Ui.Begin(view, _scroll);
             if (_picker != null) DrawBonePicker();
             else
             {
@@ -81,8 +87,46 @@ namespace VRoidPlus
                     case 6: DrawSetup(); break;
                 }
             }
-            GUILayout.EndScrollView();
-            GUILayout.EndArea();
+            _contentHeight = Ui.End() + 10;
+            DrawScrollBar(view);
+
+            // Resize grip (bottom-right corner).
+            GUI.Box(new Rect(_rect.xMax - 14, _rect.yMax - 14, 14, 14), "");
+        }
+
+        private void DrawScrollBar(Rect view)
+        {
+            if (_contentHeight <= view.height) return;
+            var track = new Rect(view.xMax + 4, view.y, 10, view.height);
+            GUI.Box(track, "");
+            float frac = view.height / _contentHeight;
+            float h = Mathf.Max(20, track.height * frac);
+            float y = track.y + (track.height - h) * (_scroll / Mathf.Max(1, _contentHeight - view.height));
+            GUI.Box(new Rect(track.x, y, track.width, h), "");
+            // Click on the track to jump.
+            var e = Event.current;
+            if (e != null && e.type == EventType.MouseDown && track.Contains(e.mousePosition))
+            {
+                _scroll = (e.mousePosition.y - track.y) / track.height * _contentHeight - view.height / 2;
+                e.Use();
+            }
+        }
+
+        private void HandleHotkeys(Event e)
+        {
+            if (e == null) return;
+            if (_recordingKey && e.type == EventType.KeyDown && e.keyCode != KeyCode.None && !Hotkey.IsModifier(e.keyCode))
+            {
+                if (e.keyCode != KeyCode.Escape)
+                {
+                    var h = new Hotkey { Key = e.keyCode, Ctrl = e.control, Shift = e.shift, Alt = e.alt };
+                    Settings.Current.ToggleKey = h.ToString();
+                    Settings.Save();
+                }
+                _recordingKey = false;
+                e.Use();
+            }
+            else if (Settings.Toggle.Matches(e) && !Ui.IsTyping) { SetOpen(!_open); e.Use(); }
         }
 
         private void SetOpen(bool open)
@@ -98,13 +142,21 @@ namespace VRoidPlus
             Settings.Save();
         }
 
-        private void HandleDrag(Event e)
+        private void HandleDragAndResize(Event e)
         {
             if (e == null) return;
-            var titleBar = new Rect(_rect.x, _rect.y, _rect.width, 26);
-            if (e.type == EventType.MouseDown && titleBar.Contains(e.mousePosition)) { _dragging = true; _dragOffset = e.mousePosition - _rect.position; e.Use(); }
-            else if (e.type == EventType.MouseUp && _dragging) { _dragging = false; SaveWindow(); }
+            var titleBar = new Rect(_rect.x, _rect.y, _rect.width - 40, TitleH + 2);
+            var grip = new Rect(_rect.xMax - 18, _rect.yMax - 18, 18, 18);
+            if (e.type == EventType.MouseDown && grip.Contains(e.mousePosition)) { _resizing = true; _dragOffset = new Vector2(_rect.xMax, _rect.yMax) - e.mousePosition; e.Use(); }
+            else if (e.type == EventType.MouseDown && titleBar.Contains(e.mousePosition)) { _dragging = true; _dragOffset = e.mousePosition - _rect.position; e.Use(); }
+            else if (e.type == EventType.MouseUp && (_dragging || _resizing)) { _dragging = _resizing = false; SaveWindow(); }
             else if (e.type == EventType.MouseDrag && _dragging) { _rect.position = e.mousePosition - _dragOffset; e.Use(); }
+            else if (e.type == EventType.MouseDrag && _resizing)
+            {
+                var corner = e.mousePosition + _dragOffset;
+                _rect.width = corner.x - _rect.x; _rect.height = corner.y - _rect.y;
+                e.Use();
+            }
         }
 
         // While the mouse is over this window, VRoid's buttons underneath shouldn't react to clicks.
@@ -130,69 +182,25 @@ namespace VRoidPlus
             }
         }
 
-        private void EnsureStyles()
-        {
-            if (_wrap != null) return;
-            _wrap = LabelStyle(); _wrap.wordWrap = true;
-            _title = LabelStyle(); _title.fontStyle = FontStyle.Bold;
-            _small = LabelStyle(); _small.wordWrap = true; _small.fontSize = 11;
-        }
-
-        /// <summary>
-        /// A copy of the default label style. VRoid's Unity build has GUIStyle's copy constructor stripped,
-        /// so the style is built from an empty one and the relevant settings are copied over.
-        /// </summary>
-        private static GUIStyle LabelStyle()
-        {
-            var src = GUI.skin.label;
-            var s = new GUIStyle();
-            s.font = src.font;
-            s.fontSize = src.fontSize;
-            s.alignment = src.alignment;
-            s.richText = src.richText;
-            s.clipping = src.clipping;
-            s.margin = src.margin;
-            s.padding = src.padding;
-            s.normal.textColor = src.normal.textColor;
-            s.hover.textColor = src.normal.textColor;
-            return s;
-        }
-
-        private void DrawTabs()
-        {
-            for (int row = 0; row < 2; row++)
-            {
-                GUILayout.BeginHorizontal(None);
-                for (int i = row * 4; i < Math.Min(_tabs.Length, row * 4 + 4); i++)
-                {
-                    var label = i == _tab ? $"[{_tabs[i]}]" : _tabs[i];
-                    if (GUILayout.Button(label, None)) { _tab = i; _picker = null; _scroll = Vector2.zero; }
-                }
-                GUILayout.EndHorizontal();
-            }
-        }
-
         // ------------------------------------------------------------------ helpers
 
-        private void Text(string s) => GUILayout.Label(s, _wrap, None);
-        private void Hint(string s) => GUILayout.Label(s, _small, None);
-        private bool Button(string s) => GUILayout.Button(s, None);
-        private bool Button(string s, float w) => GUILayout.Button(s, new[] { GUILayout.Width(w) });
-        private void Header(string s) { GUILayout.Space(6); GUILayout.Label(s, _title, None); }
+        private static void Text(string s) => Ui.Label(s, Ui.Wrap);
+        private static void Hint(string s) => Ui.Label(s, Ui.Small);
+        private static void Header(string s) => Ui.Header(s);
 
-        private string _confirmDelete;
+        private string _confirm;
 
         /// <summary>Delete needs two clicks.</summary>
         private bool DeleteButton(string id)
         {
-            bool armed = _confirmDelete == id;
-            if (!GUILayout.Button(armed ? "Sure?" : "Delete", new[] { GUILayout.Width(60) })) return false;
-            if (armed) { _confirmDelete = null; return true; }
-            _confirmDelete = id;
+            bool armed = _confirm == id;
+            if (!Ui.Button(armed ? "Sure?" : "Delete", 60)) return false;
+            if (armed) { _confirm = null; return true; }
+            _confirm = id;
             return false;
         }
 
-        private void Status(string s) { if (!string.IsNullOrEmpty(s)) { GUILayout.Space(4); Text("» " + s); } }
+        private static void Status(string s) { if (!string.IsNullOrEmpty(s)) { Ui.Space(4); Text(">> " + s); } }
 
         // ------------------------------------------------------------------ tabs
 
@@ -203,17 +211,16 @@ namespace VRoidPlus
             var f = Features.FaceSets;
             Text("Save every face selection and slider as a face set, and load it onto any model, like VRoid's built-in face sets.");
             if (!f.IsMapped(out var err))
-            {
                 Hint($"Face data isn't connected for this VRoid version yet ({err}). Open a model in the Face editor; if this stays, see the Setup tab.");
-            }
-            GUILayout.BeginHorizontal(None);
-            _faceName = GUILayout.TextField(_faceName, None);
-            if (Button("Save current face", 140))
+
+            Ui.BeginRow(143);
+            _faceName = Ui.TextField("faceName", _faceName);
+            if (Ui.Button("Save current face", 140))
             {
-                if (f.Store.Exists(_faceName) && _confirmDelete != "overwrite-face:" + _faceName) { _confirmDelete = "overwrite-face:" + _faceName; f.Status = $"'{_faceName}' exists - click Save again to overwrite."; }
-                else { _confirmDelete = null; f.Save(_faceName); }
+                if (f.Store.Exists(_faceName) && _confirm != "overwrite-face:" + _faceName) { _confirm = "overwrite-face:" + _faceName; f.Status = $"'{_faceName}' exists - click Save again to overwrite."; }
+                else { _confirm = null; f.Save(_faceName); }
             }
-            GUILayout.EndHorizontal();
+            Ui.EndRow();
             Status(f.Status);
 
             Header("Saved face sets");
@@ -221,11 +228,11 @@ namespace VRoidPlus
             if (names.Count == 0) Hint("None yet.");
             foreach (var n in names)
             {
-                GUILayout.BeginHorizontal(None);
-                GUILayout.Label(n, None);
-                if (Button("Load", 60)) f.Load(n);
+                Ui.BeginRow(126);
+                Ui.Label(n, Ui.Wrap);
+                if (Ui.Button("Load", 60)) f.Load(n);
                 if (DeleteButton("face:" + n)) { f.Store.Delete(n); f.Status = $"Deleted '{n}'."; }
-                GUILayout.EndHorizontal();
+                Ui.EndRow();
             }
             Hint("Files: " + f.Store.Folder);
         }
@@ -241,10 +248,10 @@ namespace VRoidPlus
             if (h.GroupList(out var err) == null)
                 Hint($"Hair groups aren't connected for this VRoid version yet ({err}). Open the hairstyle editor; if this stays, see the Setup tab.");
 
-            GUILayout.BeginHorizontal(None);
-            _hairName = GUILayout.TextField(_hairName, None);
-            if (Button("Copy to library", 130)) h.Capture(_hairName);
-            GUILayout.EndHorizontal();
+            Ui.BeginRow(133);
+            _hairName = Ui.TextField("hairName", _hairName);
+            if (Ui.Button("Copy to library", 130)) h.Capture(_hairName);
+            Ui.EndRow();
             Status(h.Status);
 
             Header("Hair library");
@@ -252,11 +259,11 @@ namespace VRoidPlus
             if (names.Count == 0) Hint("Empty.");
             foreach (var n in names)
             {
-                GUILayout.BeginHorizontal(None);
-                GUILayout.Label(n, None);
-                if (Button("Add to this hairstyle", 150)) h.Import(n);
+                Ui.BeginRow(216);
+                Ui.Label(n, Ui.Wrap);
+                if (Ui.Button("Add to this hairstyle", 150)) h.Import(n);
                 if (DeleteButton("hair:" + n)) { h.Library.Delete(n); h.Status = $"Deleted '{n}'."; }
-                GUILayout.EndHorizontal();
+                Ui.EndRow();
             }
         }
 
@@ -270,7 +277,8 @@ namespace VRoidPlus
             Text($"Pick which bone each {what} follows. By default they all follow the head; choose any bone on the model instead.");
             Hint("The part keeps its current position and follows the chosen bone from then on. VRoid rebuilds parts when you edit them; the choice is re-applied automatically.");
             if (!Avatar.Found) { Text("No model is loaded."); return; }
-            _showAllParts = GUILayout.Toggle(_showAllParts, $"Show every mesh (if a {what} is missing from the list)", None);
+            var all = Ui.Toggle(_showAllParts, $"Show every mesh (if a {what} is missing from the list)");
+            if (all != _showAllParts) { _showAllParts = all; _partsCacheTime = 0; }
 
             if (_partsCacheOwner != anchors || Time.unscaledTime > _partsCacheTime)
             {
@@ -283,12 +291,12 @@ namespace VRoidPlus
             {
                 if (part.Renderer == null) continue;
                 var rule = anchors.RuleFor(part.Name);
-                GUILayout.BeginHorizontal(None);
-                GUILayout.Label($"{part.Name}  ({part.Roots.Count} bone chain{(part.Roots.Count == 1 ? "" : "s")})\n    follows: {(part.CurrentAnchor != null ? part.CurrentAnchor.name : "?")}{(rule != null ? "  (custom)" : "")}", _small, None);
+                Ui.BeginRow(166);
+                Ui.Label($"{part.Name}  ({part.Roots.Count} bone chain{(part.Roots.Count == 1 ? "" : "s")})\n   follows: {(part.CurrentAnchor != null ? part.CurrentAnchor.name : "?")}{(rule != null ? "  (custom)" : "")}", Ui.Small);
                 var p = part;
-                if (Button("Choose bone…", 105)) OpenPicker($"Bone for {part.Name}", t => { anchors.SetRule(p, t); _partsCacheTime = 0; });
-                if (rule != null && Button("Reset", 50)) { anchors.SetRule(part, null); _partsCacheTime = 0; }
-                GUILayout.EndHorizontal();
+                if (Ui.Button("Choose bone...", 105)) OpenPicker($"Bone for {part.Name}", t => { anchors.SetRule(p, t); _partsCacheTime = 0; });
+                if (rule != null && Ui.Button("Reset", 52)) { anchors.SetRule(part, null); _partsCacheTime = 0; }
+                Ui.EndRow();
             }
         }
 
@@ -301,20 +309,21 @@ namespace VRoidPlus
             changed |= Slider("Forearm Size", ref s.ForearmSize);
             changed |= Slider("Thigh Size", ref s.ThighSize);
             changed |= Slider("Calf Size", ref s.CalfSize);
-            if (Button("Reset all")) { s.BicepSize = s.ForearmSize = s.ThighSize = s.CalfSize = 1f; changed = true; }
+            Ui.Space(4);
+            if (Ui.Button("Reset all", 100)) { s.BicepSize = s.ForearmSize = s.ThighSize = s.CalfSize = 1f; changed = true; }
             if (changed) { Features.Body.MarkDirty(); Settings.Save(); }
             if (!Avatar.Found) Hint("No model is loaded.");
             Hint("Values are remembered and re-applied when VRoid rebuilds the body. They are part of the preview; see README for exporting.");
         }
 
-        private bool Slider(string label, ref float v)
+        private static bool Slider(string label, ref float v)
         {
-            GUILayout.BeginHorizontal(None);
-            GUILayout.Label(label, new[] { GUILayout.Width(100) });
-            var nv = GUILayout.HorizontalSlider(v, 0.5f, 2f, None);
-            GUILayout.Label($"{nv * 100:F0}%", new[] { GUILayout.Width(45) });
-            if (Button("↺", 26)) nv = 1f;
-            GUILayout.EndHorizontal();
+            Ui.BeginRow(110);
+            Ui.Label(label, Ui.Wrap, 100);
+            var nv = Ui.Slider(v, 0.5f, 2f);
+            Ui.Label($"{nv * 100:F0}%", Ui.Wrap, 48);
+            if (Ui.Button("Reset", 52)) nv = 1f;
+            Ui.EndRow();
             nv = Mathf.Round(nv * 100f) / 100f;
             if (Mathf.Approximately(nv, v)) return false;
             v = nv;
@@ -326,14 +335,14 @@ namespace VRoidPlus
             var p = Features.Pose;
             var s = Settings.Current;
             Header("Show Controller");
-            var off = GUILayout.Toggle(s.ShowControllerDefaultOff, "Start with 'Show Controller' off when the pose editor opens", None);
+            var off = Ui.Toggle(s.ShowControllerDefaultOff, "Start with 'Show Controller' off when the pose editor opens");
             if (off != s.ShowControllerDefaultOff) { s.ShowControllerDefaultOff = off; Settings.Save(); }
             Hint(p.LastToggleInfo);
 
             Header("Load Pose (.fbx)");
             Text("Load a pose or animation from an FBX file (Mixamo, Blender, etc.). Animations play like VRoid's built-in ones: play/pause only, the pose can't be edited while loaded.");
             if (!Avatar.Found) Hint("No model is loaded.");
-            if (Button("Load .fbx file…"))
+            if (Ui.Button("Load .fbx file...", 160))
             {
                 var path = FileDialog.Open("Load pose or animation", "FBX files (*.fbx)|*.fbx|All files|*.*");
                 if (!string.IsNullOrEmpty(path)) p.LoadFbx(path);
@@ -344,23 +353,23 @@ namespace VRoidPlus
             var take = p.Take;
             if (p.Scene.Takes.Count > 1)
             {
-                GUILayout.BeginHorizontal(None);
-                if (Button("◀", 30)) { p.TakeIndex = (p.TakeIndex - 1 + p.Scene.Takes.Count) % p.Scene.Takes.Count; p.Time0 = 0; }
-                GUILayout.Label($"Animation {p.TakeIndex + 1}/{p.Scene.Takes.Count}: {take?.Name}", None);
-                if (Button("▶", 30)) { p.TakeIndex = (p.TakeIndex + 1) % p.Scene.Takes.Count; p.Time0 = 0; }
-                GUILayout.EndHorizontal();
+                Ui.BeginRow(0);
+                if (Ui.Button("<", 30)) { p.TakeIndex = (p.TakeIndex - 1 + p.Scene.Takes.Count) % p.Scene.Takes.Count; p.Time0 = 0; }
+                if (Ui.Button(">", 30)) { p.TakeIndex = (p.TakeIndex + 1) % p.Scene.Takes.Count; p.Time0 = 0; }
+                Ui.Label($"Animation {p.TakeIndex + 1}/{p.Scene.Takes.Count}: {take?.Name}", Ui.Wrap);
+                Ui.EndRow();
             }
             if (take != null && take.Length > 0)
             {
-                GUILayout.BeginHorizontal(None);
-                if (Button(p.Paused ? "▶ Play" : "❚❚ Pause", 90)) p.Paused = !p.Paused;
-                GUILayout.Label($"{p.Time0:F1}s / {take.Length:F1}s", None);
-                GUILayout.EndHorizontal();
-                var loop = GUILayout.Toggle(s.FbxLoop, "Loop", None);
-                var rm = GUILayout.Toggle(s.FbxApplyRootMotion, "Allow the model to move around (root motion)", None);
+                Ui.BeginRow(0);
+                if (Ui.Button(p.Paused ? "Play" : "Pause", 90)) p.Paused = !p.Paused;
+                Ui.Label($"{p.Time0:F1}s / {take.Length:F1}s", Ui.Wrap);
+                Ui.EndRow();
+                var loop = Ui.Toggle(s.FbxLoop, "Loop");
+                var rm = Ui.Toggle(s.FbxApplyRootMotion, "Allow the model to move around (root motion)");
                 if (loop != s.FbxLoop || rm != s.FbxApplyRootMotion) { s.FbxLoop = loop; s.FbxApplyRootMotion = rm; Settings.Save(); }
             }
-            if (Button("Unload (back to VRoid poses)")) p.Unload();
+            if (Ui.Button("Unload (back to VRoid poses)", 220)) p.Unload();
         }
 
         // ------------------------------------------------------------------ setup / explorer
@@ -371,87 +380,85 @@ namespace VRoidPlus
         private string _keyword = "Face";
         private List<string> _candidates;
         private string _setupStatus;
-
         private bool _recordingKey;
 
         private void DrawSetup()
         {
             var m = Mapping.Current;
             Header("Shortcut");
-            GUILayout.BeginHorizontal(None);
-            GUILayout.Label("Open/close VRoid Plus:", new[] { GUILayout.Width(150) });
-            GUILayout.Label(_recordingKey ? "press the new keys... (Esc cancels)" : Settings.Current.ToggleKey, None);
-            if (!_recordingKey && Button("Change...", 80)) { _recordingKey = true; GUIUtility.keyboardControl = 0; }
-            if (!_recordingKey && Button("Default", 60)) { Settings.Current.ToggleKey = Hotkey.Default; Settings.Save(); }
-            GUILayout.EndHorizontal();
+            Ui.BeginRow(_recordingKey ? 0 : 146);
+            Ui.Label("Open/close: " + (_recordingKey ? "press the new keys... (Esc cancels)" : Settings.Current.ToggleKey), Ui.Wrap);
+            if (!_recordingKey && Ui.Button("Change...", 80)) _recordingKey = true;
+            if (!_recordingKey && Ui.Button("Default", 60)) { Settings.Current.ToggleKey = Hotkey.Default; Settings.Save(); }
+            Ui.EndRow();
 
             Text("Body sliders, anchors and FBX poses work on their own. Face sets and hair merging edit VRoid's internal data, whose names differ between VRoid versions; they are set here (saved in mapping.json).");
 
             Header("Connections");
-            MappingRow("Face data", ref m.FaceData);
-            MappingRow("Face refresh (optional)", ref m.FaceRefresh);
-            MappingRow("Hair group list", ref m.HairGroupList);
-            MappingRow("Hair refresh (optional)", ref m.HairRefresh);
-            GUILayout.BeginHorizontal(None);
-            if (Button("Save mapping")) { Mapping.Save(); _setupStatus = "Saved " + Mapping.FilePath; }
-            if (Button("Reload from file")) { Mapping.Load(); _setupStatus = "Reloaded."; }
-            GUILayout.EndHorizontal();
+            MappingRow("Face data", "map.face", ref m.FaceData);
+            MappingRow("Face refresh (optional)", "map.faceRefresh", ref m.FaceRefresh);
+            MappingRow("Hair group list", "map.hair", ref m.HairGroupList);
+            MappingRow("Hair refresh (optional)", "map.hairRefresh", ref m.HairRefresh);
+            Ui.BeginRow(0);
+            if (Ui.Button("Save mapping", 120)) { Mapping.Save(); _setupStatus = "Saved " + Mapping.FilePath; }
+            if (Ui.Button("Reload from file", 130)) { Mapping.Load(); _setupStatus = "Reloaded."; }
+            Ui.EndRow();
             Status(_setupStatus);
 
             Header("Find VRoid's data");
-            if (Button("Write type dump (for sharing / bug reports)")) _setupStatus = Explorer.DumpTypes();
-            GUILayout.BeginHorizontal(None);
-            GUILayout.Label("Search singletons:", new[] { GUILayout.Width(120) });
-            _keyword = GUILayout.TextField(_keyword, None);
-            if (Button("Find", 50)) _candidates = Explorer.FindCandidates(_keyword);
-            GUILayout.EndHorizontal();
+            if (Ui.Button("Write type dump (for sharing / bug reports)", 300)) _setupStatus = Explorer.DumpTypes();
+            Ui.BeginRow(53);
+            Ui.Label("Search:", Ui.Wrap, 60);
+            _keyword = Ui.TextField("keyword", _keyword);
+            if (Ui.Button("Find", 50)) _candidates = Explorer.FindCandidates(_keyword);
+            Ui.EndRow();
             if (_candidates != null)
             {
                 if (_candidates.Count == 0) Hint("Nothing found.");
                 foreach (var c in _candidates.Take(60))
                 {
-                    GUILayout.BeginHorizontal(None);
-                    GUILayout.Label(c, _small, None);
-                    if (Button("Explore", 65)) Navigate(c);
-                    GUILayout.EndHorizontal();
+                    Ui.BeginRow(68);
+                    Ui.Label(c, Ui.Small);
+                    if (Ui.Button("Explore", 65)) Navigate(c);
+                    Ui.EndRow();
                 }
             }
 
             Header("Explorer");
-            GUILayout.BeginHorizontal(None);
-            _explorePath = GUILayout.TextField(_explorePath, None);
-            if (Button("Go", 34)) Navigate(_explorePath);
-            if (Button("Up", 34)) Navigate(Up(_explorePath));
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal(None);
-            if (Button("Use as Face data")) { m.FaceData = _explorePath; Mapping.Save(); _setupStatus = "Face data set."; }
-            if (Button("Use as Hair group list")) { m.HairGroupList = _explorePath; Mapping.Save(); _setupStatus = "Hair group list set."; }
-            GUILayout.EndHorizontal();
+            Ui.BeginRow(80);
+            _explorePath = Ui.TextField("explore", _explorePath);
+            if (Ui.Button("Go", 36)) Navigate(_explorePath);
+            if (Ui.Button("Up", 36)) Navigate(Up(_explorePath));
+            Ui.EndRow();
+            Ui.BeginRow(0);
+            if (Ui.Button("Use as Face data", 150)) { m.FaceData = _explorePath; Mapping.Save(); _setupStatus = "Face data set."; }
+            if (Ui.Button("Use as Hair group list", 170)) { m.HairGroupList = _explorePath; Mapping.Save(); _setupStatus = "Hair group list set."; }
+            Ui.EndRow();
             if (_rowsError != null) Hint(_rowsError);
             if (_rows != null)
             {
                 foreach (var r in _rows)
                 {
-                    GUILayout.BeginHorizontal(None);
-                    GUILayout.Label($"{r.Name} : {r.Type} = {r.Value}", _small, None);
-                    if (r.Expandable && Button("›", 26))
+                    Ui.BeginRow(r.Expandable ? 30 : 0);
+                    Ui.Label($"{r.Name} : {r.Type} = {r.Value}", Ui.Small);
+                    if (r.Expandable && Ui.Button(">", 28))
                         Navigate(r.Name.StartsWith("[") ? _explorePath + r.Name : (_explorePath.Contains("::") ? _explorePath + "." + r.Name : _explorePath + "::" + r.Name));
-                    GUILayout.EndHorizontal();
+                    Ui.EndRow();
                 }
             }
         }
 
-        private void MappingRow(string label, ref string value)
+        private static void MappingRow(string label, string id, ref string value)
         {
-            GUILayout.BeginHorizontal(None);
-            GUILayout.Label(label, new[] { GUILayout.Width(150) });
-            value = GUILayout.TextField(value ?? "", None);
-            GUILayout.EndHorizontal();
+            Ui.BeginRow(0);
+            Ui.Label(label, Ui.Wrap, 160);
+            value = Ui.TextField(id, value ?? "");
+            Ui.EndRow();
             if (!string.IsNullOrWhiteSpace(value))
             {
                 var o = ReflectionPath.Resolve(value, out var err);
-                Hint(o != null ? "    ✓ found " + o.GetType().Name + (ListAccess.IsList(o) ? $" ({ListAccess.Count(o)} items)" : "")
-                               : value.TrimEnd().EndsWith("()") ? "    (method, runs when used)" : "    ✗ " + err);
+                Hint(o != null ? "    OK: found " + o.GetType().Name + (ListAccess.IsList(o) ? $" ({ListAccess.Count(o)} items)" : "")
+                               : value.TrimEnd().EndsWith("()") ? "    (method, runs when used)" : "    Not found: " + err);
             }
         }
 
@@ -483,18 +490,18 @@ namespace VRoidPlus
 
         private void OpenPicker(string title, Action<Transform> onPick)
         {
-            _picker = onPick; _pickerTitle = title; _scroll = Vector2.zero;
+            _picker = onPick; _pickerTitle = title; _scroll = 0;
         }
 
         private void DrawBonePicker()
         {
-            GUILayout.Label(_pickerTitle, _title, None);
-            if (Button("Cancel")) { _picker = null; return; }
-            GUILayout.BeginHorizontal(None);
-            GUILayout.Label("Filter:", new[] { GUILayout.Width(45) });
-            _boneFilter = GUILayout.TextField(_boneFilter, None);
-            GUILayout.EndHorizontal();
-            _humanoidOnly = GUILayout.Toggle(_humanoidOnly, "Main skeleton bones only", None);
+            Ui.Label(_pickerTitle, Ui.Bold);
+            if (Ui.Button("Cancel", 80)) { _picker = null; return; }
+            Ui.BeginRow(0);
+            Ui.Label("Filter:", Ui.Wrap, 50);
+            _boneFilter = Ui.TextField("boneFilter", _boneFilter);
+            Ui.EndRow();
+            _humanoidOnly = Ui.Toggle(_humanoidOnly, "Main skeleton bones only");
 
             var bones = Avatar.AllBones.Where(b => b != null);
             if (_humanoidOnly) bones = bones.Where(Avatar.IsHumanoid);
@@ -503,7 +510,7 @@ namespace VRoidPlus
                 var human = Avatar.HumanName(b);
                 var label = human != null ? $"{human}  ({b.name})" : Avatar.Path(b);
                 if (_boneFilter.Length > 0 && label.IndexOf(_boneFilter, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                if (GUILayout.Button(label, None))
+                if (Ui.Button(label))
                 {
                     var pick = _picker; _picker = null;
                     pick(b);

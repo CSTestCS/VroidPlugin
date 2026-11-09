@@ -94,7 +94,7 @@ Path syntax: `Namespace.Type::StaticMember.Member.List[0].Method()`, or `$find:N
 - **Exporting (VRM) and saving (.vroid)**: anchor bones, body sliders and FBX poses act on the model in VRoid's 3D view. Whether VRoid's exporter keeps them depends on how it rebuilds the model at export time, and that hasn't been verified yet. Check your exported model. Face sets and imported hair groups are written into VRoid's own data, so they save and export normally.
 - Body slider values and anchor choices are stored in VRoid Plus's settings (`BepInEx\config\VRoidPlus\`), not inside the `.vroid` file. They apply to whichever model is open.
 - Hair vertices that VRoid skins directly to the head bone (not to the hair's own bones) stay on the head.
-- The VRoid Plus window is drawn with Unity's IMGUI. If the window never appears, send `BepInEx\LogOutput.log` with your bug report.
+- The window is drawn with basic Unity drawing calls only, because VRoid's Unity build lacks most of the usual UI toolkit (GUILayout). If a control isn't available it switches to a simpler version and notes it in `BepInEx\LogOutput.log`.
 
 ---
 
