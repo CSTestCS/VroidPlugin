@@ -87,6 +87,24 @@ namespace VRoidPlus
             return string.Join("/", parts);
         }
 
+        private static List<Animator> _allHumanoids = new();
+        private static float _nextAllSearch;
+
+        /// <summary>
+        /// Every humanoid model in the scene. VRoid keeps several copies of the avatar (the editor model,
+        /// and in photo mode PhotoBoothModel / PreviewModelOrigin / MeshReductionReference).
+        /// </summary>
+        public static List<Animator> AllHumanoids()
+        {
+            if (Time.unscaledTime < _nextAllSearch && _allHumanoids.All(a => a != null)) return _allHumanoids;
+            _nextAllSearch = Time.unscaledTime + 2f;
+            _allHumanoids = new List<Animator>();
+            foreach (var a in Object.FindObjectsOfType<Animator>())
+                if (a != null && a.isHuman && a.gameObject.activeInHierarchy && a.GetBoneTransform(HumanBodyBones.Hips) != null)
+                    _allHumanoids.Add(a);
+            return _allHumanoids;
+        }
+
         public static IEnumerable<Renderer> Renderers()
         {
             var a = Animator;

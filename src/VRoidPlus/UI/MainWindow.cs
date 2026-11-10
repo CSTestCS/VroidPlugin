@@ -231,9 +231,9 @@ namespace VRoidPlus
         private void DrawFaceSets()
         {
             var f = Features.FaceSets;
-            Text("Save every face selection and slider as a face set, and load it onto any model, like VRoid's built-in face sets.");
-            if (!f.IsMapped(out var err))
-                Hint($"Face data isn't connected for this VRoid version yet ({err}). Open a model in the Face editor; if this stays, see the Setup tab.");
+            Text("Save all face sliders and colors (face shape, eyes, eyebrows, nose, mouth, ears, skin...) as a face set, and apply it to any model, like VRoid's built-in face sets.");
+            if (!f.IsMapped(out var err)) Hint("Open a model to save or apply face sets.");
+            Hint("Tip: choose the same part presets (e.g. eye type) first; sliders are applied to whatever preset the part currently uses.");
 
             Ui.BeginRow(143);
             _faceName = Ui.TextField("faceName", _faceName);
@@ -259,34 +259,12 @@ namespace VRoidPlus
             Hint("Files: " + f.Store.Folder);
         }
 
-        private string _hairName = "Hair parts";
 
         private void DrawHairMerge()
         {
             var h = Features.HairMerge;
             Text("Combine hairstyles: add the hair groups of any hairstyle (built-in or custom; Front, Back, Overall Hair, Extensions, Side, Ahoge or Extra) to the hairstyle you're editing.");
-            Hint("1. In the hairstyle editor, open the hairstyle you want to take groups FROM and press 'Copy to library'.\n" +
-                 "2. Open the hairstyle you want to add them TO and press 'Add to this hairstyle'. Its own groups are kept.");
-            if (h.GroupList(out var err) == null)
-                Hint($"Hair groups aren't connected for this VRoid version yet ({err}). Open the hairstyle editor; if this stays, see the Setup tab.");
-
-            Ui.BeginRow(133);
-            _hairName = Ui.TextField("hairName", _hairName);
-            if (Ui.Button("Copy to library", 130)) h.Capture(_hairName);
-            Ui.EndRow();
-            Status(h.Status);
-
-            Header("Hair library");
-            var names = h.Library.List();
-            if (names.Count == 0) Hint("Empty.");
-            foreach (var n in names)
-            {
-                Ui.BeginRow(216);
-                Ui.Label(n, Ui.Wrap);
-                if (Ui.Button("Add to this hairstyle", 150)) h.Import(n);
-                if (DeleteButton("hair:" + n)) { h.Library.Delete(n); h.Status = $"Deleted '{n}'."; }
-                Ui.EndRow();
-            }
+            Text("Not working yet. VRoid stores hair groups together with their materials and bones, and copying them safely needs one more diagnostics capture (see the button above, taken in the Hair editor).");
         }
 
         private bool _showAllParts;

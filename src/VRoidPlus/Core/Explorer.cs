@@ -46,6 +46,8 @@ namespace VRoidPlus
                     try
                     {
                         if (t.IsEnum) { w.WriteLine("    = " + string.Join(", ", Enum.GetNames(t))); continue; }
+                        foreach (var c in t.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                            w.WriteLine($"    .ctor({string.Join(", ", c.GetParameters().Select(p => Short(p.ParameterType) + " " + p.Name))})");
                         foreach (var p in t.GetProperties(all))
                             w.WriteLine($"    {(p.GetMethod?.IsStatic == true ? "static " : "")}prop {Short(p.PropertyType)} {p.Name}{(p.SetMethod != null ? " {get;set;}" : " {get;}")}");
                         foreach (var f in t.GetFields(all).Where(f => !f.Name.StartsWith("NativeFieldInfoPtr") && !f.Name.StartsWith("NativeMethodInfoPtr")))
@@ -142,6 +144,19 @@ namespace VRoidPlus
         /// <summary>Protobuf messages (VRoid's model data) print themselves as JSON.</summary>
         public static bool IsProtobufMessage(object o) =>
             o != null && o.GetType().GetMethod("CalculateSize", Type.EmptyTypes) != null && o.GetType().GetMethod("MergeFrom", new[] { o.GetType() }) != null;
+
+        /// <summary>Key/value pairs of an IL2CPP (or managed) dictionary, via its enumerator.</summary>
+        public static IEnumerable<(object, object)> Pairs(object dict)
+        {
+            foreach (var item in Enumerate(dict, 5000))
+            {
+                if (item == null) continue;
+                var t = item.GetType();
+                object k = null, v = null;
+                try { k = t.GetProperty("Key")?.GetValue(item); v = t.GetProperty("Value")?.GetValue(item); } catch { }
+                yield return (k, v);
+            }
+        }
 
         /// <summary>Items of any IL2CPP or managed collection, through GetEnumerator/MoveNext/Current.</summary>
         public static IEnumerable<object> Enumerate(object collection, int max)

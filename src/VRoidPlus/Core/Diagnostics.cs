@@ -314,8 +314,12 @@ namespace VRoidPlus
             if (ctx == null) { w.WriteLine("No model open (open a .vroid file and capture again)."); return; }
 
             w.WriteLine();
+            w.WriteLine("######## Model base collection (shared hair materials etc.)");
+            FullData(w, VRoidApi.Get(VRoidApi.Get(ctx, "ActiveModel"), "BaseCollection"), 1);
+
+            w.WriteLine();
             w.WriteLine("######## Leaf transferables (GetActiveLeafTransferables)");
-            foreach (var (key, value) in Pairs(Call(w, ctx, "GetActiveLeafTransferables")))
+            foreach (var (key, value) in Explorer.Pairs(Call(w, ctx, "GetActiveLeafTransferables")))
             {
                 w.WriteLine($"--- transferable {key}");
                 DumpObject(w, value, "", 1, 2, new HashSet<object>());
@@ -323,15 +327,16 @@ namespace VRoidPlus
 
             w.WriteLine();
             w.WriteLine("######## Leaf transferable groups (GetActiveLeafTransferableGroups) with parameters and data");
-            foreach (var (key, value) in Pairs(Call(w, ctx, "GetActiveLeafTransferableGroups")))
+            foreach (var (key, value) in Explorer.Pairs(Call(w, ctx, "GetActiveLeafTransferableGroups")))
             {
                 var id = key?.ToString();
+                var groupType = Call(w, ctx, "GetTypeOfTransferableGroup", id)?.ToString() ?? "";
                 w.WriteLine();
-                w.WriteLine($"=== group {id}   type: {Call(w, ctx, "GetTypeOfTransferableGroup", id)}");
+                w.WriteLine($"=== group {id}   type: {groupType}");
                 DumpObject(w, value, "", 1, 2, new HashSet<object>());
                 w.WriteLine("  -- parameters");
                 int n = 0;
-                foreach (var (pk, pv) in Pairs(Call(w, ctx, "GetParametersForTransferableGroup", id)))
+                foreach (var (pk, pv) in Explorer.Pairs(Call(w, ctx, "GetParametersForTransferableGroup", id)))
                 {
                     if (n++ > 300) { w.WriteLine("    ..."); break; }
                     w.WriteLine($"    {pk} = {Explorer.PreviewValue(pv)}");
@@ -346,10 +351,28 @@ namespace VRoidPlus
                         var tr = ListAccess.Get(list, i);
                         w.WriteLine($"    [{i}] {tr?.GetType().FullName}");
                         DumpObject(w, tr, "", 3, 3, new HashSet<object>());
+                        if (WantsFullData(groupType)) FullData(w, VRoidApi.Get(tr, "Collection"), 3);
                     }
                 }
                 if (_dataLines > MaxDataLines) { w.WriteLine("# (truncated)"); break; }
             }
+        }
+
+        private static bool WantsFullData(string type) =>
+            type.Contains("Hair") || type.Contains("Accessory") || type.Contains("AnimalEar") || type.Contains("Tail");
+
+        /// <summary>The complete protobuf form of a SpecificCollection (hair groups, materials, bones...) as JSON.</summary>
+        private static void FullData(TextWriter w, object collection, int depth)
+        {
+            if (collection == null) { Line(w, depth, "full data: (no collection)"); return; }
+            try
+            {
+                var proto = collection.GetType().GetMethod("ToProtobuf", Type.EmptyTypes)?.Invoke(collection, null);
+                var json = proto?.ToString() ?? "(ToProtobuf unavailable)";
+                if (json.Length > 400000) json = json.Substring(0, 400000) + "...(cut)";
+                Line(w, depth, "full data (protobuf JSON): " + json);
+            }
+            catch (Exception e) { Line(w, depth, "full data failed: " + (e.InnerException ?? e).Message); }
         }
 
         private static object Step(TextWriter w, object obj, string member, string path)
@@ -377,19 +400,6 @@ namespace VRoidPlus
                 return m.Invoke(obj, args);
             }
             catch (Exception e) { w.WriteLine($"  ({method} failed: {(e.InnerException ?? e).Message})"); return null; }
-        }
-
-        /// <summary>Key/value pairs of an IL2CPP (or managed) dictionary, via its enumerator.</summary>
-        private static IEnumerable<(object, object)> Pairs(object dict)
-        {
-            foreach (var item in Explorer.Enumerate(dict, 2000))
-            {
-                if (item == null) continue;
-                var t = item.GetType();
-                object k = null, v = null;
-                try { k = t.GetProperty("Key")?.GetValue(item); v = t.GetProperty("Value")?.GetValue(item); } catch { }
-                yield return (k, v);
-            }
         }
 
         private static void DumpObject(TextWriter w, object obj, string path, int depth, int maxDepth, HashSet<object> seen)

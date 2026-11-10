@@ -3,49 +3,114 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using UnityEngine;
 
 namespace VRoidPlus
 {
     /// <summary>
-    /// Custom face sets: saves every face selection and slider (the whole face object VRoid edits) under a
-    /// name, and loads it back onto any avatar - the same idea as VRoid's built-in face sets.
+    /// Custom face sets: saves every slider and color of every face item (face shape, eyebrows, eyelids,
+    /// eyelashes, eyelines, irises, eye whites, highlights, nose, mouth, lips, cheeks, ears, face skin)
+    /// under a name, and applies them to the open model, like VRoid's built-in face sets.
+    /// Uses VRoid's own item/parameter data (see VRoidApi), so no mapping is needed.
     /// </summary>
     internal class FaceSets
     {
         public readonly NamedStore Store = new("FaceSets");
         public string Status = "";
 
-        public bool IsMapped(out string error)
+        private static readonly string[] FaceTypes =
         {
-            var o = ReflectionPath.Resolve(Mapping.Current.FaceData, out error);
-            return o != null;
+            "FaceShape", "Eyebrow", "Eyelid", "Eyeline", "Eyelash", "Iris", "EyeWhite", "EyeHighlight", "EyeSurrounding",
+            "Nose", "NoseLighting", "Mouth", "MouthLine", "Lip", "Cheek", "FaceSkin", "Ear",
+        };
+
+        public static bool IsFaceType(string type)
+        {
+            var i = type.LastIndexOf('.');
+            var last = i >= 0 ? type.Substring(i + 1) : type;
+            return FaceTypes.Contains(last);
         }
+
+        public static string ShortType(string type) { var i = type.LastIndexOf('.'); return i >= 0 ? type.Substring(i + 1) : type; }
+
+        public bool IsMapped(out string error) => VRoidApi.Context(out error) != null;
 
         public void Save(string name)
         {
-            var face = ReflectionPath.Resolve(Mapping.Current.FaceData, out var err);
-            if (face == null) { Status = "Face data not found: " + err; return; }
-            var snap = new ObjectSnapshot { Exclude = new HashSet<string>(Mapping.Current.FaceExclude ?? Array.Empty<string>()) };
-            var json = snap.Capture(face);
-            json["$vroidplus"] = "faceset";
-            json["$saved"] = DateTime.Now.ToString("s");
-            Store.Save(name, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-            Status = $"Saved face set '{name}' ({json.Count - 3} values).";
+            var ctx = VRoidApi.Context(out var err);
+            if (ctx == null) { Status = "Can't save: " + err; return; }
+            var parts = new JsonArray();
+            int values = 0;
+            foreach (var g in VRoidApi.Groups(ctx).Where(g => IsFaceType(g.Type)))
+            {
+                var ps = new JsonArray();
+                foreach (var p in VRoidApi.Parameters(ctx, g.Id))
+                {
+                    var o = new JsonObject { ["key"] = p.Key, ["kind"] = p.Kind };
+                    if (p.Kind == "Color") { o["r"] = p.Color.r; o["g"] = p.Color.g; o["b"] = p.Color.b; o["a"] = p.Color.a; }
+                    else o["value"] = p.Value;
+                    ps.Add(o);
+                    values++;
+                }
+                parts.Add(new JsonObject { ["type"] = g.Type, ["resource"] = g.ResourceName, ["params"] = ps });
+            }
+            if (parts.Count == 0) { Status = "No face items found on this model."; return; }
+            var file = new JsonObject { ["$vroidplus"] = "faceset2", ["$saved"] = DateTime.Now.ToString("s"), ["parts"] = parts };
+            Store.Save(name, file.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            Status = $"Saved face set '{name}': {parts.Count} face parts, {values} values.";
         }
 
         public void Load(string name)
         {
-            var face = ReflectionPath.Resolve(Mapping.Current.FaceData, out var err);
-            if (face == null) { Status = "Face data not found: " + err; return; }
-            var data = JsonNode.Parse(Store.Load(name)) as JsonObject;
-            if (data == null) { Status = "File is not a face set."; return; }
-            var snap = new ObjectSnapshot { Exclude = new HashSet<string>(Mapping.Current.FaceExclude ?? Array.Empty<string>()) };
-            snap.Restore(face, data);
-            var refreshed = ReflectionPath.Invoke(Mapping.Current.FaceRefresh, out var rerr);
-            Status = $"Applied face set '{name}'." +
-                     (snap.Warnings.Count > 0 ? $" {snap.Warnings.Count} value(s) skipped (see log)." : "") +
-                     (refreshed ? "" : " Refresh failed: " + rerr);
-            foreach (var w in snap.Warnings.Take(50)) Plugin.Logger.LogWarning("Face set: " + w);
+            var ctx = VRoidApi.Context(out var err);
+            if (ctx == null) { Status = "Can't load: " + err; return; }
+            var file = JsonNode.Parse(Store.Load(name)) as JsonObject;
+            if (file?["parts"] is not JsonArray parts) { Status = "This face set was saved by an older VRoid Plus version and can't be loaded. Please save it again."; return; }
+
+            var groups = VRoidApi.Groups(ctx).Where(g => IsFaceType(g.Type)).ToList();
+            var used = new HashSet<string>();
+            var changed = new List<string>();
+            int ok = 0, failed = 0, missingParts = 0;
+            string firstError = null;
+            var presetDiffers = new List<string>();
+
+            foreach (var part in parts.OfType<JsonObject>())
+            {
+                var type = (string)part["type"];
+                var target = groups.FirstOrDefault(g => g.Type == type && !used.Contains(g.Id));
+                if (target == null) { missingParts++; continue; }
+                used.Add(target.Id);
+                var savedRes = (string)part["resource"];
+                if (!string.IsNullOrEmpty(savedRes) && savedRes != target.ResourceName) presetDiffers.Add(ShortType(type));
+
+                var current = VRoidApi.Parameters(ctx, target.Id).ToDictionary(p => p.Key);
+                foreach (var po in (part["params"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+                {
+                    var key = (string)po["key"];
+                    if (key == null || !current.ContainsKey(key)) continue;   // this preset has no such slider
+                    var p = new VRoidApi.Param { Key = key, Kind = (string)po["kind"] };
+                    if (p.Kind == "Color") p.Color = new Color(F(po, "r"), F(po, "g"), F(po, "b"), F(po, "a", 1f));
+                    else p.Value = F(po, "value");
+                    var e = VRoidApi.SetParameter(ctx, target.Id, p);
+                    if (e == null) ok++; else { failed++; firstError ??= $"{ShortType(type)}.{key}: {e}"; }
+                }
+                changed.Add(target.Id);
+            }
+            VRoidApi.NotifyChanged(ctx, changed);
+
+            Status = $"Applied face set '{name}': {ok} values set" +
+                     (failed > 0 ? $", {failed} failed (first: {firstError})" : "") +
+                     (missingParts > 0 ? $", {missingParts} parts not on this model" : "") + "." +
+                     (presetDiffers.Count > 0 ? $" These parts use a different preset than when saved, so their shape may differ: {string.Join(", ", presetDiffers)}." : "") +
+                     " Undo (Ctrl+Z) doesn't cover this change yet.";
+            if (failed > 0) Plugin.Logger.LogWarning("Face set: " + firstError);
+        }
+
+        private static float F(JsonObject o, string k, float def = 0f)
+        {
+            var n = o[k];
+            if (n == null) return def;
+            try { return (float)n.GetValue<double>(); } catch { try { return n.GetValue<float>(); } catch { return def; } }
         }
     }
 

@@ -57,22 +57,54 @@ namespace VRoidPlus
             if (!Avatar.Found) return;
             if (AllDefault && _states.Count == 0) return;
 
-            int seen = 0, unreadable = 0, noMesh = 0;
+            int seen = 0, unreadable = 0, noMesh = 0, models = 0;
             var key = $"{Settings.Current.BicepSize:F3}|{Settings.Current.ForearmSize:F3}|{Settings.Current.ThighSize:F3}|{Settings.Current.CalfSize:F3}";
-            foreach (var r in Avatar.Renderers())
+            // Every copy of the avatar (editor model, photo mode models), each with its own skeleton.
+            foreach (var animator in Avatar.AllHumanoids())
             {
-                var smr = Compat.As<SkinnedMeshRenderer>(r);
-                if (smr == null) continue;
-                var mesh = smr.sharedMesh;
-                seen++;
-                if (mesh == null) { noMesh++; continue; }
-                if (!mesh.isReadable) { unreadable++; continue; }
-                Process(smr, mesh, key);
+                if (animator == null) continue;
+                models++;
+                var rig = new Rig(animator);
+                foreach (var smr in animator.GetComponentsInChildren<SkinnedMeshRenderer>(false))
+                {
+                    if (smr == null) continue;
+                    var mesh = smr.sharedMesh;
+                    seen++;
+                    if (mesh == null) { noMesh++; continue; }
+                    if (!mesh.isReadable) { unreadable++; continue; }
+                    Process(smr, mesh, key, rig);
+                }
             }
-            LastInfo = $"{Time.unscaledTime:F0}s: {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, key {key}";
+            LastInfo = $"{Time.unscaledTime:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, key {key}";
         }
 
-        private void Process(SkinnedMeshRenderer smr, Mesh mesh, string key)
+        /// <summary>One model's skeleton: its humanoid bones and helpers to classify other bones.</summary>
+        private class Rig
+        {
+            private readonly Dictionary<HumanBodyBones, Transform> _bones = new();
+            private readonly HashSet<Transform> _human = new();
+
+            public Rig(Animator a)
+            {
+                for (var b = HumanBodyBones.Hips; b < HumanBodyBones.LastBone; b++)
+                {
+                    var t = a.GetBoneTransform(b);
+                    if (t == null) continue;
+                    _bones[b] = t; _human.Add(t);
+                }
+            }
+
+            public Transform Bone(HumanBodyBones b) => _bones.TryGetValue(b, out var t) ? t : null;
+            public bool IsHumanoid(Transform t) => t != null && _human.Contains(t);
+
+            public Transform HumanoidAncestor(Transform t)
+            {
+                for (var p = t; p != null; p = p.parent) if (_human.Contains(p)) return p;
+                return null;
+            }
+        }
+
+        private void Process(SkinnedMeshRenderer smr, Mesh mesh, string key, Rig rig)
         {
             var bones = smr.bones;
             if (bones == null || bones.Length == 0) return;
@@ -87,10 +119,10 @@ namespace VRoidPlus
                 segIndex[i] = -1;
                 var b = bones[i];
                 if (b == null) continue;
-                Transform owner = Avatar.IsHumanoid(b) ? b : (b.name.StartsWith("J_Adj_", System.StringComparison.Ordinal) ? Avatar.HumanoidAncestor(b) : null);
+                Transform owner = rig.IsHumanoid(b) ? b : (b.name.StartsWith("J_Adj_", System.StringComparison.Ordinal) ? rig.HumanoidAncestor(b) : null);
                 if (owner == null) continue;
                 for (int s = 0; s < _segments.Length; s++)
-                    if (owner == Avatar.Bone(_segments[s].Bone)) { segIndex[i] = s; any = true; }
+                    if (owner == rig.Bone(_segments[s].Bone)) { segIndex[i] = s; any = true; }
             }
             if (!any) return;
 
@@ -119,8 +151,8 @@ namespace VRoidPlus
                 factor[i] = 1f;
                 if (segIndex[i] < 0) continue;
                 var seg = _segments[segIndex[i]];
-                var child = Avatar.Bone(seg.Child);
-                var limb = Avatar.Bone(seg.Bone);
+                var child = rig.Bone(seg.Child);
+                var limb = rig.Bone(seg.Bone);
                 if (child == null || limb == null) continue;
                 axisStart[i] = bones[i].InverseTransformPoint(limb.position);
                 axis[i] = bones[i].InverseTransformPoint(child.position) - axisStart[i];
