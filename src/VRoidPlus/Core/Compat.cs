@@ -26,6 +26,18 @@ namespace VRoidPlus
 #endif
         }
 
+        /// <summary>Replaces a skinned mesh's bone list (through reflection, so a stripped setter can't break the build).</summary>
+        public static void SetBones(SkinnedMeshRenderer smr, Transform[] bones)
+        {
+            var prop = smr.GetType().GetProperty("bones");
+            if (prop == null || !prop.CanWrite) throw new MissingMemberException("SkinnedMeshRenderer.bones setter");
+#if IL2CPP
+            prop.SetValue(smr, new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Transform>(bones));
+#else
+            prop.SetValue(smr, bones);
+#endif
+        }
+
         /// <summary>Finds every live Unity object whose IL2CPP type is <paramref name="assemblyQualifiedName"/>.</summary>
         public static List<Component> FindComponentsByTypeName(string assemblyQualifiedName)
         {
@@ -79,6 +91,10 @@ namespace VRoidPlus
             catch { return null; }
         }
 
+        /// <summary>UI text components: Unity's, TextMeshPro, and VRoid's own (VRoid.UI.Component.VRoidText).</summary>
+        public static bool IsTextComponent(string typeName) =>
+            typeName == "UnityEngine.UI.Text" || typeName.StartsWith("TMPro.TextMeshPro", StringComparison.Ordinal) || typeName.EndsWith("VRoidText", StringComparison.Ordinal);
+
         /// <summary>Visible text on a UI element: looks at Text and TextMeshPro children.</summary>
         public static string GetLabelText(Component c)
         {
@@ -87,7 +103,7 @@ namespace VRoidPlus
             {
                 if (child == null) continue;
                 var tn = RealTypeName(child);
-                if (tn == "UnityEngine.UI.Text" || tn.StartsWith("TMPro.TextMeshPro", StringComparison.Ordinal))
+                if (IsTextComponent(tn))
                 {
                     var s = GetPropertyAsString(child, "text");
                     if (!string.IsNullOrEmpty(s)) parts.Add(s);

@@ -116,8 +116,8 @@ namespace VRoidPlus
     {
         public static readonly FaceSets FaceSets = new();
         public static readonly HairMerge HairMerge = new();
-        public static readonly BoneAnchors HairAnchors = new("Hair", "hair-anchors.json", () => Mapping.Current.HairNamePatterns);
-        public static readonly BoneAnchors AccessoryAnchors = new("Accessory", "accessory-anchors.json", () => Mapping.Current.AccessoryNamePatterns);
+        public static readonly BoneAnchors HairAnchors = new(BoneAnchors.Kind.Hair, "hair-anchors-v2.json");
+        public static readonly BoneAnchors AccessoryAnchors = new(BoneAnchors.Kind.Accessory, "accessory-anchors-v2.json");
         public static readonly BodySliders Body = new();
         public static readonly PoseEditor Pose = new();
 

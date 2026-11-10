@@ -75,7 +75,7 @@ namespace VRoidPlus
             // Zip once before reading VRoid's live data: if that step crashes VRoid, this ZIP still exists.
             notes.AppendLine("data: not captured yet (if this line is in the ZIP, VRoid closed while reading its data)");
             MakeZip(dir, zip, notes);
-            Section(notes, "data", () => File.WriteAllText(Path.Combine(dir, "data.txt"), Data()));
+            Section(notes, "data", () => Data(Path.Combine(dir, "data.txt")));
             MakeZip(dir, zip, notes);
             return zip;
         }
@@ -129,10 +129,10 @@ namespace VRoidPlus
                 sb.AppendLine($"== {title} anchors (pattern match / all meshes)");
                 Safe.Run("diag.anchors", () =>
                 {
-                    var matched = anchors.FindParts(false);
-                    var all = anchors.FindParts(true);
-                    sb.AppendLine($"  matched {matched.Count}, all {all.Count}");
-                    foreach (var p in matched.Take(40)) sb.AppendLine($"    {p.Name}: {p.Roots.Count} roots, anchor {p.CurrentAnchor?.name}");
+                    var matched = anchors.FindItems(false);
+                    var all = anchors.FindItems(true);
+                    sb.AppendLine($"  matched {matched.Count}, all items {all.Count}");
+                    foreach (var p in all.Take(60)) sb.AppendLine($"    {(p.IsHair ? "hair" : p.IsAccessory ? "accessory" : "other")}: {p.Label}: id {p.Id}, {p.Roots.Count} roots, {p.Meshes.Count} meshes, origin {(p.PartOrigin != null ? PathOf(p.PartOrigin) : "-")}, anchor {p.CurrentAnchor?.name}");
                 });
             }
             sb.AppendLine();
@@ -255,9 +255,7 @@ namespace VRoidPlus
                         var a = Compat.As<Animator>(c);
                         return $"{{human={a.isHuman} enabled={a.enabled} avatar={N(P(a, "avatar"))}}}";
                     }
-                    case "UnityEngine.UI.Text":
-                    case "TMPro.TextMeshProUGUI":
-                    case "TMPro.TextMeshPro":
+                    case var textType when Compat.IsTextComponent(textType):
                     {
                         var s = Compat.GetPropertyAsString(c, "text") ?? "";
                         if (s.Length > 50) s = s.Substring(0, 50) + "...";
@@ -283,97 +281,148 @@ namespace VRoidPlus
 
         private static int _dataLines;
 
-        private static string Data()
+        /// <summary>
+        /// Targeted walk from the AvatarEditor component to the open model's editing context, then every item
+        /// ("transferable group") with its type, info, parameters and data (protobuf messages as JSON).
+        /// Written line by line with flushing, so if something crashes VRoid the file shows how far it got.
+        /// </summary>
+        private static void Data(string path)
         {
-            var sb = new StringBuilder();
             _dataLines = 0;
-
-            // 1. Live VRoid components in the scene (one or two per type), e.g. VRoidStudio.GUI.AvatarEditor.AvatarEditor.
-            sb.AppendLine("######## VRoid components in the scene   (path syntax works in mapping.json)");
-            var perType = new Dictionary<string, int>();
+            using var w = new StreamWriter(path, false, Encoding.UTF8) { AutoFlush = true };
+            const string editorType = "VRoidStudio.GUI.AvatarEditor.AvatarEditor";
+            object editor = null;
             foreach (var mb in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
             {
-                if (mb == null) continue;
-                var tn = Compat.RealTypeName(mb);
-                if (!IsVRoidType(tn)) continue;
-                perType.TryGetValue(tn, out var n);
-                if (n >= 2) continue;
-                perType[tn] = n + 1;
-                var managed = ReflectionPath.FindType(tn);
-                var obj = managed != null ? Compat.CastTo(mb, managed) : null;
-                sb.AppendLine();
-                sb.AppendLine($"=== $find:{tn}   on '{PathOf(mb.transform)}'");
-                if (obj == null) { sb.AppendLine("  (no managed wrapper)"); continue; }
-                DumpObject(sb, obj, $"$find:{tn}::", 1, 3, new HashSet<object>());
-                if (_dataLines > MaxDataLines) break;
+                if (mb == null || Compat.RealTypeName(mb) != editorType) continue;
+                var managed = ReflectionPath.FindType(editorType);
+                editor = managed != null ? Compat.CastTo(mb, managed) : null;
+                break;
+            }
+            w.WriteLine($"AvatarEditor: {(editor != null ? "found" : "NOT FOUND")}");
+            if (editor == null) return;
+
+            var root = "$find:" + editorType + "::";
+            var vm = Step(w, editor, "_viewModel", root + "_viewModel");
+            Shallow(w, vm, root + "_viewModel");
+            var file = Step(w, vm, "CurrentFile", root + "_viewModel.CurrentFile");
+            var fileModel = Step(w, file, "model", root + "_viewModel.CurrentFile.model");
+            var engine = Step(w, fileModel, "engine", root + "_viewModel.CurrentFile.model.engine");
+            Shallow(w, engine, root + "_viewModel.CurrentFile.model.engine");
+            var ctx = Step(w, engine, "Context", root + "_viewModel.CurrentFile.model.engine.Context");
+            Shallow(w, ctx, root + "_viewModel.CurrentFile.model.engine.Context");
+            if (ctx == null) { w.WriteLine("No model open (open a .vroid file and capture again)."); return; }
+
+            w.WriteLine();
+            w.WriteLine("######## Leaf transferables (GetActiveLeafTransferables)");
+            foreach (var (key, value) in Pairs(Call(w, ctx, "GetActiveLeafTransferables")))
+            {
+                w.WriteLine($"--- transferable {key}");
+                DumpObject(w, value, "", 1, 2, new HashSet<object>());
             }
 
-            // 2. Static members (singletons, service locators) of VRoid types.
-            sb.AppendLine();
-            sb.AppendLine("######## Static members of VRoid types");
-            foreach (var asm in Explorer.GameAssemblies())
+            w.WriteLine();
+            w.WriteLine("######## Leaf transferable groups (GetActiveLeafTransferableGroups) with parameters and data");
+            foreach (var (key, value) in Pairs(Call(w, ctx, "GetActiveLeafTransferableGroups")))
             {
-                Type[] types;
-                try { types = asm.GetTypes(); } catch (ReflectionTypeLoadException e) { types = e.Types.Where(x => x != null).ToArray(); }
-                foreach (var t in types)
+                var id = key?.ToString();
+                w.WriteLine();
+                w.WriteLine($"=== group {id}   type: {Call(w, ctx, "GetTypeOfTransferableGroup", id)}");
+                DumpObject(w, value, "", 1, 2, new HashSet<object>());
+                w.WriteLine("  -- parameters");
+                int n = 0;
+                foreach (var (pk, pv) in Pairs(Call(w, ctx, "GetParametersForTransferableGroup", id)))
                 {
-                    if (_dataLines > MaxDataLines) break;
-                    if (t.ContainsGenericParameters || !IsVRoidType(t.FullName)) continue;
-                    foreach (var (name, type, get) in StaticMembers(t))
+                    if (n++ > 300) { w.WriteLine("    ..."); break; }
+                    w.WriteLine($"    {pk} = {Explorer.PreviewValue(pv)}");
+                    DumpObject(w, pv, "", 3, 3, new HashSet<object>());
+                }
+                w.WriteLine("  -- transferables (cloned copies)");
+                var list = Call(w, ctx, "CloneAndGetAllTransferablesInTransferableGroup", id);
+                if (list != null && ListAccess.IsList(list))
+                {
+                    for (int i = 0; i < ListAccess.Count(list) && i < 20; i++)
                     {
-                        if (ObjectSnapshot.IsSimple(type) || name.StartsWith("NativeFieldInfoPtr") || name.StartsWith("NativeMethodInfoPtr")) continue;
-                        object v;
-                        try { v = get(); } catch { continue; }
-                        if (v == null) continue;
-                        sb.AppendLine();
-                        sb.AppendLine($"=== {t.FullName}::{name} : {v.GetType().FullName}");
-                        DumpObject(sb, v, $"{t.FullName}::{name}.", 1, 2, new HashSet<object>());
+                        var tr = ListAccess.Get(list, i);
+                        w.WriteLine($"    [{i}] {tr?.GetType().FullName}");
+                        DumpObject(w, tr, "", 3, 3, new HashSet<object>());
                     }
                 }
+                if (_dataLines > MaxDataLines) { w.WriteLine("# (truncated)"); break; }
             }
-            if (_dataLines > MaxDataLines) sb.AppendLine("# (truncated)");
-            return sb.ToString();
         }
 
-        private static bool IsVRoidType(string fullName) =>
-            fullName != null && (fullName.IndexOf("VRoid", StringComparison.OrdinalIgnoreCase) >= 0 || fullName.IndexOf("Pixiv", StringComparison.OrdinalIgnoreCase) >= 0)
-            && !fullName.StartsWith("VRoidPlus", StringComparison.Ordinal);
-
-        private static IEnumerable<(string, Type, Func<object>)> StaticMembers(Type t)
+        private static object Step(TextWriter w, object obj, string member, string path)
         {
-            const BindingFlags f = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-            PropertyInfo[] props; FieldInfo[] fields;
-            try { props = t.GetProperties(f); fields = t.GetFields(f); } catch { yield break; }
-            foreach (var p in props)
-                if (p.GetIndexParameters().Length == 0 && p.GetMethod != null)
-                { var pp = p; yield return (p.Name, p.PropertyType, () => pp.GetValue(null)); }
-            foreach (var fi in fields)
-            { var ff = fi; yield return (fi.Name, fi.FieldType, () => ff.GetValue(null)); }
+            if (obj == null) { w.WriteLine($"{path}: (parent missing)"); return null; }
+            ReflectionPath.TryGetMember(obj, obj.GetType(), false, member, false, out var v, out var err);
+            w.WriteLine($"{path}: {(v != null ? v.GetType().FullName : "null " + err)}");
+            return v;
         }
 
-        private static void DumpObject(StringBuilder sb, object obj, string path, int depth, int maxDepth, HashSet<object> seen)
+        private static void Shallow(TextWriter w, object obj, string path)
+        {
+            if (obj == null) return;
+            DumpObject(w, obj, path + ".", 1, 1, new HashSet<object>());
+        }
+
+        private static object Call(TextWriter w, object obj, string method, params object[] args)
+        {
+            if (obj == null) return null;
+            try
+            {
+                var m = obj.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .FirstOrDefault(x => x.Name == method && x.GetParameters().Length == args.Length && !x.IsGenericMethodDefinition);
+                if (m == null) { w.WriteLine($"  ({method} not found)"); return null; }
+                return m.Invoke(obj, args);
+            }
+            catch (Exception e) { w.WriteLine($"  ({method} failed: {(e.InnerException ?? e).Message})"); return null; }
+        }
+
+        /// <summary>Key/value pairs of an IL2CPP (or managed) dictionary, via its enumerator.</summary>
+        private static IEnumerable<(object, object)> Pairs(object dict)
+        {
+            foreach (var item in Explorer.Enumerate(dict, 2000))
+            {
+                if (item == null) continue;
+                var t = item.GetType();
+                object k = null, v = null;
+                try { k = t.GetProperty("Key")?.GetValue(item); v = t.GetProperty("Value")?.GetValue(item); } catch { }
+                yield return (k, v);
+            }
+        }
+
+        private static void DumpObject(TextWriter w, object obj, string path, int depth, int maxDepth, HashSet<object> seen)
         {
             if (obj == null || _dataLines > MaxDataLines) return;
+            if (Explorer.IsProtobufMessage(obj))
+            {
+                string json;
+                try { json = obj.ToString(); } catch (Exception e) { json = "<" + e.Message + ">"; }
+                if (json.Length > 60000) json = json.Substring(0, 60000) + "...(cut)";
+                Line(w, depth, "protobuf " + obj.GetType().FullName + " = " + json);
+                return;
+            }
             var id = Compat.Identity(obj);
-            if (!seen.Add(id)) { Line(sb, depth, "(already shown above)"); return; }
+            if (!seen.Add(id)) { Line(w, depth, "(already shown above)"); return; }
             List<Explorer.Row> rows;
-            try { rows = Explorer.Describe(obj, 120); } catch (Exception e) { Line(sb, depth, "<" + e.Message + ">"); return; }
+            try { rows = Explorer.Describe(obj, 120); } catch (Exception e) { Line(w, depth, "<" + e.Message + ">"); return; }
             bool isList = ListAccess.IsList(obj);
             int shown = 0;
             foreach (var r in rows)
             {
-                var childPath = r.Name.StartsWith("[") ? path.TrimEnd('.') + r.Name : path + r.Name;
-                Line(sb, depth, $"{r.Name} : {r.Type} = {r.Value}");
+                Line(w, depth, $"{r.Name} : {r.Type} = {r.Value}");
                 if (!r.Expandable || r.Obj == null || depth >= maxDepth || r.Obj is UnityEngine.Object) continue;
-                if (isList && ++shown > 3) continue; // first few list elements are enough to see the shape
-                DumpObject(sb, r.Obj, childPath + ".", depth + 1, maxDepth, seen);
+                if (isList && ++shown > 3) continue;
+                DumpObject(w, r.Obj, path + r.Name + ".", depth + 1, maxDepth, seen);
             }
         }
 
-        private static void Line(StringBuilder sb, int depth, string text)
+        private static void Line(TextWriter w, int depth, string text)
         {
             _dataLines++;
-            sb.Append(' ', depth * 2).AppendLine(text);
+            w.Write(new string(' ', depth * 2));
+            w.WriteLine(text);
         }
     }
 }

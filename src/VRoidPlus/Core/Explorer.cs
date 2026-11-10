@@ -110,6 +110,20 @@ namespace VRoidPlus
                 }
                 return rows;
             }
+            if (obj.GetType().Name.StartsWith("Dictionary") || obj.GetType().Name.StartsWith("HashSet") || obj.GetType().Name.StartsWith("MapField"))
+            {
+                int i = 0;
+                foreach (var item in Enumerate(obj, max))
+                {
+                    object key = null, val = item;
+                    var kt = item?.GetType();
+                    var kp = kt?.GetProperty("Key");
+                    if (kp != null) { try { key = kp.GetValue(item); val = kt.GetProperty("Value")?.GetValue(item); } catch { } }
+                    rows.Add(new Row { Name = key != null ? $"[{Preview(key)}]" : $"[{i}]", Obj = val, Type = val?.GetType().Name ?? "null", Value = Preview(val), Expandable = val != null && !ObjectSnapshot.IsSimple(val.GetType()) });
+                    i++;
+                }
+                return rows;
+            }
             foreach (var m in ObjectSnapshot.DataMembers(obj.GetType()).Take(max))
             {
                 object v; string val;
@@ -121,6 +135,37 @@ namespace VRoidPlus
                 });
             }
             return rows;
+        }
+
+        public static string PreviewValue(object v) { try { return Preview(v); } catch (Exception e) { return "<" + e.Message + ">"; } }
+
+        /// <summary>Protobuf messages (VRoid's model data) print themselves as JSON.</summary>
+        public static bool IsProtobufMessage(object o) =>
+            o != null && o.GetType().GetMethod("CalculateSize", Type.EmptyTypes) != null && o.GetType().GetMethod("MergeFrom", new[] { o.GetType() }) != null;
+
+        /// <summary>Items of any IL2CPP or managed collection, through GetEnumerator/MoveNext/Current.</summary>
+        public static IEnumerable<object> Enumerate(object collection, int max)
+        {
+            if (collection == null) yield break;
+            object en;
+            try { en = collection.GetType().GetMethod("GetEnumerator", Type.EmptyTypes)?.Invoke(collection, null); }
+            catch { yield break; }
+            if (en == null) yield break;
+            var t = en.GetType();
+            var move = t.GetMethod("MoveNext", Type.EmptyTypes);
+            var cur = t.GetProperty("Current");
+            if (move == null || cur == null) yield break;
+            for (int i = 0; i < max; i++)
+            {
+                object item;
+                try
+                {
+                    if (!(bool)move.Invoke(en, null)) yield break;
+                    item = cur.GetValue(en);
+                }
+                catch { yield break; }
+                yield return item;
+            }
         }
 
         private static string Preview(object v)

@@ -81,7 +81,7 @@ namespace VRoidPlus
                 {
                     case 0: DrawFaceSets(); break;
                     case 1: DrawHairMerge(); break;
-                    case 2: DrawAnchors(Features.HairAnchors, "hair group"); break;
+                    case 2: DrawAnchors(Features.HairAnchors, "hair part"); break;
                     case 3: DrawBody(); break;
                     case 4: DrawAnchors(Features.AccessoryAnchors, "accessory"); break;
                     case 5: DrawPose(); break;
@@ -290,34 +290,33 @@ namespace VRoidPlus
         }
 
         private bool _showAllParts;
-        private List<BoneAnchors.Part> _partsCache = new();
+        private List<BoneAnchors.Item> _partsCache = new();
         private float _partsCacheTime;
         private BoneAnchors _partsCacheOwner;
 
         private void DrawAnchors(BoneAnchors anchors, string what)
         {
-            Text($"Pick which bone each {what} follows. By default they all follow the head; choose any bone on the model instead.");
-            Hint("The part keeps its current position and follows the chosen bone from then on. VRoid rebuilds parts when you edit them; the choice is re-applied automatically.");
+            Text($"Pick which bone each {what} follows instead of the one VRoid attaches it to. Pick any bone on the model.");
+            Hint("It keeps its current position and follows the chosen bone from then on. VRoid rebuilds items when you edit them; your choice is re-applied automatically. This changes the 3D preview; exporting is not covered yet.");
             if (!Avatar.Found) { Text("No model is loaded."); return; }
-            var all = Ui.Toggle(_showAllParts, $"Show every mesh (if a {what} is missing from the list)");
+            var all = Ui.Toggle(_showAllParts, "Also show other items (clothing etc.)");
             if (all != _showAllParts) { _showAllParts = all; _partsCacheTime = 0; }
 
             if (_partsCacheOwner != anchors || Time.unscaledTime > _partsCacheTime)
             {
-                _partsCache = anchors.FindParts(_showAllParts);
+                _partsCache = anchors.FindItems(_showAllParts);
                 _partsCacheOwner = anchors;
                 _partsCacheTime = Time.unscaledTime + 1f;
             }
-            if (_partsCache.Count == 0) Hint($"No {what}s found.");
-            foreach (var part in _partsCache)
+            if (_partsCache.Count == 0) Hint($"No {what}s found on this model.");
+            foreach (var item in _partsCache)
             {
-                if (part.Renderer == null) continue;
-                var rule = anchors.RuleFor(part.Name);
+                var rule = anchors.RuleFor(item.Id);
                 Ui.BeginRow(166);
-                Ui.Label($"{part.Name}  ({part.Roots.Count} bone chain{(part.Roots.Count == 1 ? "" : "s")})\n   follows: {(part.CurrentAnchor != null ? part.CurrentAnchor.name : "?")}{(rule != null ? "  (custom)" : "")}", Ui.Small);
-                var p = part;
-                if (Ui.Button("Choose bone...", 105)) OpenPicker($"Bone for {part.Name}", t => { anchors.SetRule(p, t); _partsCacheTime = 0; });
-                if (rule != null && Ui.Button("Reset", 52)) { anchors.SetRule(part, null); _partsCacheTime = 0; }
+                Ui.Label($"{item.Label}\n   follows: {(item.CurrentAnchor != null ? item.CurrentAnchor.name : "?")}{(rule != null ? "  (changed)" : "")}", Ui.Small);
+                var it = item;
+                if (Ui.Button("Choose bone...", 105)) OpenPicker($"Bone for {item.Label}", t => { anchors.SetRule(it, t); _partsCacheTime = 0; });
+                if (rule != null && Ui.Button("Reset", 52)) { anchors.SetRule(item, null); _partsCacheTime = 0; }
                 Ui.EndRow();
             }
         }

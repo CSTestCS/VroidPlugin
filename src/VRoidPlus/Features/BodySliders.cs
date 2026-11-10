@@ -77,14 +77,20 @@ namespace VRoidPlus
             var bones = smr.bones;
             if (bones == null || bones.Length == 0) return;
 
-            // Which bone slots in this mesh belong to a limb segment?
+            // Which bone slots in this mesh belong to a limb segment? VRoid skins the body and clothes to
+            // "J_Adj_" helper bones under each limb bone (J_Bip_L_UpperArm > J_Adj_L_UpperArm1 > ...2),
+            // so a bone counts if it is the limb bone itself or a J_Adj_ bone whose nearest main bone is it.
             var segIndex = new int[bones.Length];
             bool any = false;
             for (int i = 0; i < bones.Length; i++)
             {
                 segIndex[i] = -1;
+                var b = bones[i];
+                if (b == null) continue;
+                Transform owner = Avatar.IsHumanoid(b) ? b : (b.name.StartsWith("J_Adj_", System.StringComparison.Ordinal) ? Avatar.HumanoidAncestor(b) : null);
+                if (owner == null) continue;
                 for (int s = 0; s < _segments.Length; s++)
-                    if (bones[i] != null && bones[i] == Avatar.Bone(_segments[s].Bone)) { segIndex[i] = s; any = true; }
+                    if (owner == Avatar.Bone(_segments[s].Bone)) { segIndex[i] = s; any = true; }
             }
             if (!any) return;
 
@@ -103,7 +109,8 @@ namespace VRoidPlus
             var bind = Copy.BindPoses(mesh);
             if (weights.Length != st.Original.Length || bind.Length != bones.Length) return;
 
-            // Per bone slot: limb axis (bone-local space, from bone origin to child joint) and size factor.
+            // Per bone slot: the limb's axis (start and end joint, in that bone's local space) and size factor.
+            var axisStart = new Vector3[bones.Length];
             var axis = new Vector3[bones.Length];
             var factor = new float[bones.Length];
             var bindInv = new Matrix4x4[bones.Length];
@@ -113,8 +120,10 @@ namespace VRoidPlus
                 if (segIndex[i] < 0) continue;
                 var seg = _segments[segIndex[i]];
                 var child = Avatar.Bone(seg.Child);
-                if (child == null) continue;
-                axis[i] = bones[i].InverseTransformPoint(child.position);
+                var limb = Avatar.Bone(seg.Bone);
+                if (child == null || limb == null) continue;
+                axisStart[i] = bones[i].InverseTransformPoint(limb.position);
+                axis[i] = bones[i].InverseTransformPoint(child.position) - axisStart[i];
                 factor[i] = Mathf.Clamp(seg.Size(), 0.3f, 3f);
                 bindInv[i] = bind[i].inverse;
             }
@@ -125,10 +134,10 @@ namespace VRoidPlus
                 var p = st.Original[v];
                 var w = weights[v];
                 var delta = Vector3.zero;
-                delta += Push(p, w.boneIndex0, w.weight0, axis, factor, bind, bindInv);
-                delta += Push(p, w.boneIndex1, w.weight1, axis, factor, bind, bindInv);
-                delta += Push(p, w.boneIndex2, w.weight2, axis, factor, bind, bindInv);
-                delta += Push(p, w.boneIndex3, w.weight3, axis, factor, bind, bindInv);
+                delta += Push(p, w.boneIndex0, w.weight0, axisStart, axis, factor, bind, bindInv);
+                delta += Push(p, w.boneIndex1, w.weight1, axisStart, axis, factor, bind, bindInv);
+                delta += Push(p, w.boneIndex2, w.weight2, axisStart, axis, factor, bind, bindInv);
+                delta += Push(p, w.boneIndex3, w.weight3, axisStart, axis, factor, bind, bindInv);
                 result[v] = p + delta;
             }
 
@@ -139,14 +148,14 @@ namespace VRoidPlus
             Applied++;
         }
 
-        private static Vector3 Push(Vector3 meshPos, int bi, float w, Vector3[] axis, float[] factor,
+        private static Vector3 Push(Vector3 meshPos, int bi, float w, Vector3[] axisStart, Vector3[] axis, float[] factor,
             Matrix4x4[] bind, Matrix4x4[] bindInv)
         {
             if (w <= 0f || bi < 0 || bi >= factor.Length || Mathf.Approximately(factor[bi], 1f)) return Vector3.zero;
             var a = axis[bi];
             var len2 = a.sqrMagnitude;
             if (len2 < 1e-8f) return Vector3.zero;
-            var local = bind[bi].MultiplyPoint3x4(meshPos);
+            var local = bind[bi].MultiplyPoint3x4(meshPos) - axisStart[bi];
             var t = Mathf.Clamp01(Vector3.Dot(local, a) / len2);
             var radial = local - a * t;
             var localDelta = radial * (factor[bi] - 1f);
