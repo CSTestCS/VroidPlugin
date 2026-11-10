@@ -122,7 +122,7 @@ namespace VRoidPlus
             sb.AppendLine();
             sb.AppendLine("== Body sliders");
             sb.AppendLine("  " + Features.Body.LastInfo);
-            sb.AppendLine($"  values: bicep {Settings.Current.BicepSize} forearm {Settings.Current.ForearmSize} thigh {Settings.Current.ThighSize} calf {Settings.Current.CalfSize}");
+            sb.AppendLine($"  values: {string.Join(", ", BodySliders.Sliders.Select(d => $"{d.Id} {Features.Body.Get(d.Id)}"))}; file {Features.Body.File.Path ?? "(unsaved)"}, unsaved changes {Features.Body.File.HasUnsavedChanges}");
             foreach (var (title, anchors) in new[] { ("Hair", Features.HairAnchors), ("Accessory", Features.AccessoryAnchors) })
             {
                 sb.AppendLine();
@@ -368,7 +368,7 @@ namespace VRoidPlus
             try
             {
                 var proto = collection.GetType().GetMethod("ToProtobuf", Type.EmptyTypes)?.Invoke(collection, null);
-                var json = proto?.ToString() ?? "(ToProtobuf unavailable)";
+                var json = proto != null ? Explorer.ProtobufJson(proto) : "(ToProtobuf unavailable)";
                 if (json.Length > 400000) json = json.Substring(0, 400000) + "...(cut)";
                 Line(w, depth, "full data (protobuf JSON): " + json);
             }
@@ -408,7 +408,7 @@ namespace VRoidPlus
             if (Explorer.IsProtobufMessage(obj))
             {
                 string json;
-                try { json = obj.ToString(); } catch (Exception e) { json = "<" + e.Message + ">"; }
+                json = Explorer.ProtobufJson(obj);
                 if (json.Length > 60000) json = json.Substring(0, 60000) + "...(cut)";
                 Line(w, depth, "protobuf " + obj.GetType().FullName + " = " + json);
                 return;

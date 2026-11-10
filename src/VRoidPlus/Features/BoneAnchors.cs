@@ -12,6 +12,8 @@ namespace VRoidPlus
         public string Item = "";
         /// <summary>Bone the item should follow (transform name).</summary>
         public string TargetBone = "";
+        /// <summary>Bone VRoid had it on, so Reset can put it back even after VRoid rebuilt the model.</summary>
+        public string OriginalBone = "";
         /// <summary>Old (v0.1) per-mesh rules; ignored.</summary>
         public string Renderer;
     }
@@ -159,23 +161,42 @@ namespace VRoidPlus
 
         public void SetRule(Item item, Transform target)
         {
+            var old = RuleFor(item.Id);
             Data.Rules.RemoveAll(x => x.Item == item.Id);
-            if (target != null) Data.Rules.Add(new AnchorRule { Item = item.Id, TargetBone = target.name });
-            Save();
-            if (target != null) Apply(item, target); else Reset(item);
+            if (target != null)
+            {
+                var original = old?.OriginalBone;
+                if (string.IsNullOrEmpty(original)) original = item.CurrentAnchor != null ? item.CurrentAnchor.name : "";
+                Data.Rules.Add(new AnchorRule { Item = item.Id, TargetBone = target.name, OriginalBone = original });
+                Save();
+                Apply(item, target);
+            }
+            else
+            {
+                Save();
+                var original = old?.OriginalBone;
+                if (string.IsNullOrEmpty(original) && item.IsHair) original = "J_Bip_C_Head";
+                Reset(item, original);
+                // Ask VRoid to rebuild the model too: that puts everything exactly where VRoid wants it.
+                var ctx = VRoidApi.Context(out _);
+                if (ctx != null) VRoidApi.Call(ctx, "MarkNeedsUpdate", true, false);
+            }
         }
 
         // ------------------------------------------------------------------ apply / reset
+        // Keyed by Unity instance id: IL2CPP hands out a new wrapper object each time the same transform is
+        // fetched, so the transforms themselves are not reliable dictionary keys.
 
-        /// <summary>root transform -> the bone it was under before we moved it</summary>
-        private readonly Dictionary<Transform, Transform> _originalParent = new();
-        /// <summary>stand-in transforms per item (one per original bone they replace)</summary>
-        private readonly Dictionary<string, Dictionary<Transform, Transform>> _standIns = new();
+        /// <summary>instance id of a moved transform -> the bone it was under before we moved it</summary>
+        private readonly Dictionary<int, Transform> _originalParent = new();
+        /// <summary>stand-in transforms per item: original bone's instance id -> stand-in</summary>
+        private readonly Dictionary<string, Dictionary<int, Transform>> _standIns = new();
 
         private void Move(Transform t, Transform target)
         {
             if (t == null || t == target || target.IsChildOf(t)) return;
-            if (!_originalParent.ContainsKey(t)) _originalParent[t] = t.parent;
+            var id = t.GetInstanceID();
+            if (!_originalParent.ContainsKey(id)) _originalParent[id] = t.parent;
             if (t.parent != target) t.SetParent(target, true);
         }
 
@@ -190,7 +211,7 @@ namespace VRoidPlus
             if (item.PartOrigin != null) Move(item.PartOrigin, target);
 
             // Strand vertices weighted straight to a humanoid bone (the head) follow a stand-in under the target.
-            if (!_standIns.TryGetValue(item.Id, out var map)) _standIns[item.Id] = map = new Dictionary<Transform, Transform>();
+            if (!_standIns.TryGetValue(item.Id, out var map)) _standIns[item.Id] = map = new Dictionary<int, Transform>();
             foreach (var smr in item.Meshes)
             {
                 if (smr == null) continue;
@@ -202,14 +223,15 @@ namespace VRoidPlus
                     var b = bones[i];
                     arr[i] = b;
                     if (b == null || !Avatar.IsHumanoid(b) || b == target) continue;
-                    if (!map.TryGetValue(b, out var standIn) || standIn == null)
+                    var key = b.GetInstanceID();
+                    if (!map.TryGetValue(key, out var standIn) || standIn == null)
                     {
                         var go = new GameObject();
                         go.name = $"VRoidPlus_StandIn_{b.name}_{item.Id}";
                         standIn = go.transform;
                         standIn.SetParent(b, false);          // same pose as the original bone...
                         standIn.SetParent(target, true);      // ...then follow the target from here on
-                        map[b] = standIn;
+                        map[key] = standIn;
                     }
                     else if (standIn.parent != target) standIn.SetParent(target, true);
                     arr[i] = standIn;
@@ -219,32 +241,46 @@ namespace VRoidPlus
             }
         }
 
-        private void Reset(Item item)
+        private void Reset(Item item, string originalBoneName)
         {
+            Transform byName = null;
+            if (!string.IsNullOrEmpty(originalBoneName))
+                foreach (var b in Avatar.AllBones) if (b != null && b.name == originalBoneName) { byName = b; break; }
+
             void Restore(Transform t)
             {
-                if (t != null && _originalParent.TryGetValue(t, out var orig) && orig != null) t.SetParent(orig, true);
-                if (t != null) _originalParent.Remove(t);
+                if (t == null) return;
+                var id = t.GetInstanceID();
+                _originalParent.TryGetValue(id, out var orig);
+                if (orig == null) orig = byName;
+                if (orig != null && t.parent != orig) t.SetParent(orig, true);
+                _originalParent.Remove(id);
             }
             Restore(item.PartOrigin);
             foreach (var r in item.Roots) Restore(r);
 
+            // Put the real bones back into the strand meshes in place of our stand-ins.
+            var standInNames = "VRoidPlus_StandIn_";
+            foreach (var smr in item.Meshes)
+            {
+                if (smr == null) continue;
+                var bones = smr.bones;
+                var arr = new Transform[bones.Length];
+                bool changed = false;
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    arr[i] = bones[i];
+                    if (bones[i] == null || !bones[i].name.StartsWith(standInNames, StringComparison.Ordinal)) continue;
+                    // "VRoidPlus_StandIn_<bone>_<itemId>" -> <bone>
+                    var rest = bones[i].name.Substring(standInNames.Length);
+                    var cut = rest.LastIndexOf("_" + item.Id, StringComparison.Ordinal);
+                    var boneName = cut > 0 ? rest.Substring(0, cut) : rest;
+                    foreach (var b in Avatar.AllBones) if (b != null && b.name == boneName && !b.name.StartsWith(standInNames, StringComparison.Ordinal)) { arr[i] = b; changed = true; break; }
+                }
+                if (changed) Compat.SetBones(smr, arr);
+            }
             if (_standIns.TryGetValue(item.Id, out var map))
             {
-                var back = map.Where(kv => kv.Value != null).ToDictionary(kv => kv.Value, kv => kv.Key);
-                foreach (var smr in item.Meshes)
-                {
-                    if (smr == null) continue;
-                    var bones = smr.bones;
-                    var arr = new Transform[bones.Length];
-                    bool changed = false;
-                    for (int i = 0; i < arr.Length; i++)
-                    {
-                        arr[i] = bones[i];
-                        if (bones[i] != null && back.TryGetValue(bones[i], out var orig)) { arr[i] = orig; changed = true; }
-                    }
-                    if (changed) Compat.SetBones(smr, arr);
-                }
                 foreach (var s in map.Values) if (s != null) UnityEngine.Object.Destroy(s.gameObject);
                 _standIns.Remove(item.Id);
             }
@@ -257,7 +293,7 @@ namespace VRoidPlus
             _nextCheck = Time.unscaledTime + 1f;
             if (!Avatar.Found) return;
 
-            foreach (var key in _originalParent.Keys.Where(k => k == null).ToList()) _originalParent.Remove(key);
+            foreach (var key in _originalParent.Where(kv => kv.Value == null).Select(kv => kv.Key).ToList()) _originalParent.Remove(key);
             var bonesByName = new Dictionary<string, Transform>();
             foreach (var b in Avatar.AllBones) if (b != null && !bonesByName.ContainsKey(b.name)) bonesByName[b.name] = b;
 

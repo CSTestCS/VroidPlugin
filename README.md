@@ -7,7 +7,7 @@ An unofficial plugin for the **Steam version of VRoid Studio** (1.26.1 or newer)
 | **Custom face sets**: save every face selection and slider under a name and load it onto any model, like the built-in face sets | *Face Sets* tab |
 | **Hair merge**: add the hair groups of any hairstyle (built-in or custom; Front, Back, Overall Hair, Extensions, Side, Ahoge, Extra) to the hairstyle you're editing, keeping its own groups | *Hair Merge* tab |
 | **Hair anchor bones**: make a hair group follow any bone on the model instead of the head | *Hair Anchors* tab |
-| **Extra body sliders**: Bicep, Forearm, Thigh and Calf size | *Body* tab |
+| **Extra body sliders**: Bicep, Forearm, Thigh and Calf size, plus Neck, Shoulder, Upper Chest, Chest, Waist, Hip, Hand and Foot size under *More sliders*. Saved per `.vroid` file | *Body* tab |
 | **Accessory anchor bones**: same as hair anchors, for accessories | *Accessories* tab |
 | **Expanded pose editor**: *Show Controller* starts off, and you can load **.fbx** poses and animations (play/pause, like built-in animations) | *Pose* tab |
 
@@ -61,7 +61,9 @@ Each hair group or accessory is listed with the bone it currently follows. Press
 If a part is missing from the list, tick **Show every mesh**.
 
 ### Body
-Four extra sliders, from 50% to 200%. They reshape the mesh around each limb bone, so clothes on those limbs follow and bending the limb doesn't distort it.
+Bicep, Forearm, Thigh and Calf size are always shown. Press **More sliders...** for Neck, Shoulder, Upper Chest, Chest, Waist, Hip, Hand and Foot size. Every slider goes from 50% to 200%. Girth sliders reshape the mesh around each bone; Hand and Foot scale the whole hand or foot (fingers and toes too). Clothes follow, and they show in photo mode and in exports.
+
+Slider values belong to the open `.vroid` file. They're kept while you edit and stored only when you save the file in VRoid (Save or Save As). Opening another file loads its own values; a new model starts at 100%. They're stored in `BepInEx\config\VRoidPlus\models\`, not inside the `.vroid` itself, so they stay on this PC.
 
 ### Pose
 - **Show Controller** is switched off each time the pose editor opens. You can turn it on again as usual. You can disable this behaviour in the Pose tab.

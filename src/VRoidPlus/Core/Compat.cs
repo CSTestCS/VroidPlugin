@@ -134,18 +134,23 @@ namespace VRoidPlus
 #endif
         }
 
-        /// <summary>FindObjectOfType for a type only known at runtime through reflection (an interop wrapper type).</summary>
+        /// <summary>
+        /// FindObjectOfType for a MonoBehaviour type only known at runtime (an interop wrapper type).
+        /// Object.FindObjectOfType(Type) is stripped in VRoid's build, so this scans the generic
+        /// FindObjectsOfType&lt;MonoBehaviour&gt;() (which works) and matches the real type name.
+        /// </summary>
         public static object FindObjectOfManagedType(Type managedType)
         {
-#if IL2CPP
-            var il2cppType = Il2CppType.From(managedType, false);
-            if (il2cppType == null) return null;
-            var found = Object.FindObjectOfType(il2cppType);
-            if (found == null) return null;
-            return CastTo(found, managedType);
-#else
-            return Object.FindObjectOfType(managedType);
-#endif
+            var wanted = managedType.FullName;
+            // Interop may prefix namespaces with "Il2Cpp"; compare without it.
+            if (wanted != null && wanted.StartsWith("Il2Cpp", StringComparison.Ordinal) && !wanted.StartsWith("Il2CppSystem", StringComparison.Ordinal))
+                wanted = wanted.Substring(6).TrimStart('.');
+            foreach (var mb in Object.FindObjectsOfType<MonoBehaviour>())
+            {
+                if (mb == null || RealTypeName(mb) != wanted) continue;
+                return CastTo(mb, managedType);
+            }
+            return null;
         }
 
         /// <summary>Casts an interop object to a more specific interop type (no-op outside IL2CPP).</summary>

@@ -141,6 +141,28 @@ namespace VRoidPlus
 
         public static string PreviewValue(object v) { try { return Preview(v); } catch (Exception e) { return "<" + e.Message + ">"; } }
 
+        /// <summary>
+        /// A protobuf message as JSON, via Google.Protobuf.JsonFormatter (ToString on the interop wrapper only
+        /// gives the type name).
+        /// </summary>
+        public static string ProtobufJson(object message)
+        {
+            try
+            {
+                var fmt = ReflectionPath.FindType("Google.Protobuf.JsonFormatter");
+                var iMsg = ReflectionPath.FindType("Google.Protobuf.IMessage");
+                var m = fmt?.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .FirstOrDefault(x => x.Name == "ToDiagnosticString" && x.GetParameters().Length == 1);
+                if (m != null && iMsg != null)
+                {
+                    var arg = Compat.CastTo(message, iMsg) ?? message;
+                    if (m.Invoke(null, new[] { arg }) is string json) return json;
+                }
+                return "(JsonFormatter unavailable) " + message;
+            }
+            catch (Exception e) { return "(JSON failed: " + (e.InnerException ?? e).Message + ")"; }
+        }
+
         /// <summary>Protobuf messages (VRoid's model data) print themselves as JSON.</summary>
         public static bool IsProtobufMessage(object o) =>
             o != null && o.GetType().GetMethod("CalculateSize", Type.EmptyTypes) != null && o.GetType().GetMethod("MergeFrom", new[] { o.GetType() }) != null;

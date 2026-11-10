@@ -206,22 +206,24 @@ namespace VRoidPlus
         // ------------------------------------------------------------------ diagnostics
 
         private string _diagStatus;
-        private bool _diagHide;
 
         private void DrawDiagnosticsBanner()
         {
-            if (_diagHide) return;
-            Ui.Label("Help fit VRoid Plus to your VRoid: open a model (with at least one accessory), open the Hairstyle editor, then press the button below. It saves a ZIP on your Desktop to send to the developer. It only reads; nothing in VRoid is changed.", Ui.Small);
+            if (!Settings.Current.ShowDiagnosticsBanner) return;
+            Ui.Label("Help fit VRoid Plus to your VRoid: open a model and press the button. It saves a ZIP on your Desktop to send to the developer. It only reads; nothing in VRoid is changed.", Ui.Small);
             Ui.BeginRow(0);
-            if (Ui.Button("Save diagnostics ZIP", 170))
-            {
-                try { _diagStatus = "Saved: " + Diagnostics.Capture(); }
-                catch (Exception ex) { _diagStatus = "Failed: " + ex.Message; Plugin.Logger.LogError(ex); }
-            }
-            if (Ui.Button("Hide", 60)) _diagHide = true;
+            DiagnosticsButton();
+            if (Ui.Button("Hide (still in Setup tab)", 180)) { Settings.Current.ShowDiagnosticsBanner = false; Settings.Save(); }
             Ui.EndRow();
             Status(_diagStatus);
             Ui.Space(8);
+        }
+
+        private void DiagnosticsButton()
+        {
+            if (!Ui.Button("Save diagnostics ZIP", 170)) return;
+            try { _diagStatus = "Saved: " + Diagnostics.Capture(); }
+            catch (Exception ex) { _diagStatus = "Failed: " + ex.Message; Plugin.Logger.LogError(ex); }
         }
 
         // ------------------------------------------------------------------ tabs
@@ -301,31 +303,42 @@ namespace VRoidPlus
 
         private void DrawBody()
         {
+            var body = Features.Body;
             var s = Settings.Current;
-            Text("Extra body sliders. They reshape the arms and legs (and the clothes on them) around the bone, so posing doesn't distort them.");
+            Text("Extra body sliders. They reshape the body and the clothes on it around the bones, so posing doesn't distort them.");
+            if (!Avatar.Found) { Hint("No model is loaded."); return; }
+
+            var file = body.File.Path != null ? System.IO.Path.GetFileName(body.File.Path) : "this new model (not saved yet)";
+            Hint($"Values for {file}. They are saved together with the .vroid file when you save it in VRoid" +
+                 (body.File.HasUnsavedChanges ? " - you have unsaved slider changes." : "."));
+
             bool changed = false;
-            changed |= Slider("Bicep Size", ref s.BicepSize);
-            changed |= Slider("Forearm Size", ref s.ForearmSize);
-            changed |= Slider("Thigh Size", ref s.ThighSize);
-            changed |= Slider("Calf Size", ref s.CalfSize);
+            foreach (var def in BodySliders.Sliders.Where(d => !d.Extra)) changed |= Slider(def);
+
             Ui.Space(4);
-            if (Ui.Button("Reset all", 100)) { s.BicepSize = s.ForearmSize = s.ThighSize = s.CalfSize = 1f; changed = true; }
-            if (changed) { Features.Body.MarkDirty(); Settings.Save(); }
-            if (!Avatar.Found) Hint("No model is loaded.");
-            Hint("Values are remembered and re-applied when VRoid rebuilds the body. They are part of the preview; see README for exporting.");
+            if (Ui.Button(s.ShowMoreBodySliders ? "Hide more sliders" : "More sliders (neck, shoulders, chest, waist, hips, hands, feet)...", 0))
+            { s.ShowMoreBodySliders = !s.ShowMoreBodySliders; Settings.Save(); }
+            if (s.ShowMoreBodySliders)
+                foreach (var def in BodySliders.Sliders.Where(d => d.Extra)) changed |= Slider(def);
+
+            Ui.Space(4);
+            if (Ui.Button("Reset all to 100%", 140)) { body.ResetAll(); changed = true; }
+            if (changed) body.MarkDirty();
         }
 
-        private static bool Slider(string label, ref float v)
+        private static bool Slider(BodySliders.SliderDef def)
         {
+            var body = Features.Body;
+            var v = body.Get(def.Id);
             Ui.BeginRow(110);
-            Ui.Label(label, Ui.Wrap, 100);
+            Ui.Label(def.Label, Ui.Wrap, 120);
             var nv = Ui.Slider(v, 0.5f, 2f);
             Ui.Label($"{nv * 100:F0}%", Ui.Wrap, 48);
             if (Ui.Button("Reset", 52)) nv = 1f;
             Ui.EndRow();
             nv = Mathf.Round(nv * 100f) / 100f;
             if (Mathf.Approximately(nv, v)) return false;
-            v = nv;
+            body.Set(def.Id, nv);
             return true;
         }
 
@@ -384,6 +397,14 @@ namespace VRoidPlus
         private void DrawSetup()
         {
             var m = Mapping.Current;
+            Header("Diagnostics");
+            Ui.BeginRow(0);
+            DiagnosticsButton();
+            var show = Ui.Toggle(Settings.Current.ShowDiagnosticsBanner, "Show at the top of every tab");
+            if (show != Settings.Current.ShowDiagnosticsBanner) { Settings.Current.ShowDiagnosticsBanner = show; Settings.Save(); }
+            Ui.EndRow();
+            Status(_diagStatus);
+
             Header("Shortcut");
             Ui.BeginRow(_recordingKey ? 0 : 146);
             Ui.Label("Open/close: " + (_recordingKey ? "press the new keys... (Esc cancels)" : Settings.Current.ToggleKey), Ui.Wrap);

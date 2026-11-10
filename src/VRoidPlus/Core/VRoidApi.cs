@@ -17,12 +17,27 @@ namespace VRoidPlus
     {
         public const string ContextPath = "$find:VRoidStudio.GUI.AvatarEditor.AvatarEditor::_viewModel.CurrentFile.model.engine.Context";
 
+        private static object _ctx;
+        private static string _ctxError;
+        private static float _ctxTime = -10f;
+
+        /// <summary>The open model's editing context (cached for a second: finding it scans the scene).</summary>
         public static object Context(out string error)
         {
-            var ctx = ReflectionPath.Resolve(ContextPath, out error);
-            if (ctx == null) error = "no model is open (" + error + ")";
-            return ctx;
+            if (Time.unscaledTime - _ctxTime > 1f)
+            {
+                _ctxTime = Time.unscaledTime;
+                try { _ctx = ReflectionPath.Resolve(ContextPath, out _ctxError); }
+                catch (Exception e) { _ctx = null; _ctxError = e.Message; }
+                if (_ctx == null) _ctxError = "no model is open (" + _ctxError + ")";
+            }
+            error = _ctxError;
+            return _ctx;
         }
+
+        /// <summary>Resolves a path below the AvatarEditor's view model, e.g. "CurrentFile.model.path".</summary>
+        public static object FromViewModel(string rest, out string error) =>
+            ReflectionPath.Resolve("$find:VRoidStudio.GUI.AvatarEditor.AvatarEditor::_viewModel." + rest, out error);
 
         public class Group
         {
