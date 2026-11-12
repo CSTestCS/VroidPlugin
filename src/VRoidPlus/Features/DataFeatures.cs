@@ -181,14 +181,22 @@ namespace VRoidPlus
     {
         public static readonly FaceSets FaceSets = new();
         public static readonly HairMerge HairMerge = new();
-        public static readonly BoneAnchors HairAnchors = new(BoneAnchors.Kind.Hair, "hair-anchors-v2.json");
-        public static readonly BoneAnchors AccessoryAnchors = new(BoneAnchors.Kind.Accessory, "accessory-anchors-v2.json");
-        public static readonly BodySliders Body = new();
+        public static readonly BoneAnchors HairAnchors = new(BoneAnchors.Kind.Hair);
+        public static readonly BoneAnchors AccessoryAnchors = new(BoneAnchors.Kind.Accessory);
+        public static readonly BodySliders Body = CreateBody();
+
+        private static BodySliders CreateBody()
+        {
+            var b = new BodySliders();
+            ModelFile.Current.Loaded += b.MarkDirty;   // another file opened: re-apply its slider values
+            return b;
+        }
         public static readonly PoseEditor Pose = new();
 
         public static void Update()
         {
             Avatar.Refresh();
+            Safe.Run("ModelFile", ModelFile.Current.Update);
             Safe.Run("HairAnchors", HairAnchors.Update);
             Safe.Run("AccessoryAnchors", AccessoryAnchors.Update);
             Safe.Run("Body", Body.Update);

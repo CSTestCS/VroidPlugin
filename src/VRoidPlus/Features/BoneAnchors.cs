@@ -40,21 +40,21 @@ namespace VRoidPlus
         public enum Kind { Hair, Accessory }
 
         public readonly Kind Which;
-        private readonly string _file;
-        public AnchorRuleFile Data;
         private float _nextCheck;
 
         private const string Marker = ".transferable_";
 
-        public BoneAnchors(Kind which, string file)
-        {
-            Which = which;
-            _file = Path.Combine(Plugin.DataDir, file);
-            Data = Json.Read<AnchorRuleFile>(_file);
-            Data.Rules.RemoveAll(r => string.IsNullOrEmpty(r.Item));
-        }
+        public BoneAnchors(Kind which) { Which = which; }
 
-        public void Save() => Safe.Run("Anchors.Save", () => Json.Write(_file, Data));
+        /// <summary>Rules belong to the open .vroid file and are stored only when VRoid saves it (ModelFile).</summary>
+        public List<AnchorRule> Rules => Which == Kind.Hair ? ModelFile.Current.HairAnchors : ModelFile.Current.AccessoryAnchors;
+
+        public void Save() { /* kept in memory until the .vroid file is saved */ }
+
+        /// <summary>Why hair is listed per item instead of per group (empty when groups were read fine).</summary>
+        public string GroupNote = "";
+        private List<VRoidApi.HairGroupInfo> _groupCache;
+        private float _groupCacheTime = -10f;
 
         public class Item
         {
@@ -82,6 +82,101 @@ namespace VRoidPlus
 
         /// <summary>All items on the current avatar of this kind (or every item when showAll).</summary>
         public List<Item> FindItems(bool showAll)
+        {
+            if (Which == Kind.Hair && !showAll)
+            {
+                var groups = HairGroupItems();
+                if (groups != null) return groups;
+            }
+            return FindItemsByBones(showAll);
+        }
+
+        /// <summary>
+        /// One entry per hair group as VRoid's hair editor lists them (with or without physics), matched to the
+        /// "HairStrand-&lt;strandId&gt;" meshes VRoid builds for its strands.
+        /// </summary>
+        private List<Item> HairGroupItems()
+        {
+            var ctx = VRoidApi.Context(out var err);
+            if (ctx == null) { GroupNote = err; return null; }
+            if (_groupCache == null || Time.unscaledTime - _groupCacheTime > 3f)
+            {
+                _groupCacheTime = Time.unscaledTime;
+                _groupCache = VRoidApi.HairGroups(ctx, out err);
+                if (_groupCache == null) { GroupNote = "VRoid's hair group data couldn't be read (" + err + "), so hair is listed per part."; return null; }
+            }
+            GroupNote = "";
+
+            var strandMeshes = new Dictionary<string, SkinnedMeshRenderer>();
+            foreach (var r in Avatar.Renderers())
+            {
+                var n = r.gameObject.name;
+                if (!n.StartsWith("HairStrand-", StringComparison.Ordinal)) continue;
+                var smr = Compat.As<SkinnedMeshRenderer>(r);
+                if (smr != null) strandMeshes[VRoidApi.NormId(n.Substring("HairStrand-".Length))] = smr;
+            }
+
+            var items = new List<Item>();
+            foreach (var g in _groupCache)
+            {
+                var it = new Item { Id = "hairgroup:" + g.GroupId, IsHair = true };
+                var seenRoots = new HashSet<int>();
+                foreach (var sid in g.StrandIds)
+                {
+                    if (!strandMeshes.TryGetValue(sid, out var smr)) continue;
+                    it.Meshes.Add(smr);
+                    var bones = smr.bones;
+                    for (int i = 0; i < bones.Length; i++)
+                    {
+                        var b = bones[i];
+                        if (b == null || Avatar.IsHumanoid(b) || !b.name.Contains("HairJoint-")) continue;
+                        var root = b;
+                        while (root.parent != null && root.parent.name.Contains("HairJoint-")) root = root.parent;
+                        if (seenRoots.Add(root.GetInstanceID())) it.Roots.Add(root);
+                    }
+                }
+                if (it.Meshes.Count == 0) continue;   // hidden group, or not built yet
+                it.CurrentAnchor = it.Roots.Count > 0 ? it.Roots[0].parent : CurrentMeshAnchor(it.Meshes[0]);
+                it.Label = $"{SlotLabel(g.Slot)} > {g.Name}  ({it.Meshes.Count} strands{(it.Roots.Count > 0 ? ", with physics bones" : "")})";
+                items.Add(it);
+            }
+            LastGroupInfo = $"{_groupCache.Count} hair groups in VRoid's data, {strandMeshes.Count} strand meshes, {items.Count} groups matched to meshes";
+            if (items.Count == 0)
+            {
+                GroupNote = "VRoid's hair groups didn't match the model's strands (" + LastGroupInfo + "), so hair is listed per part.";
+                return null;
+            }
+            return items;
+        }
+
+        public string LastGroupInfo = "";
+
+        private static Transform CurrentMeshAnchor(SkinnedMeshRenderer smr)
+        {
+            var bones = smr.bones;
+            for (int i = 0; i < bones.Length; i++)
+            {
+                var b = bones[i];
+                if (b == null) continue;
+                if (b.name.StartsWith("VRoidPlus_StandIn_", StringComparison.Ordinal)) return b.parent;
+                if (Avatar.IsHumanoid(b)) return b;
+            }
+            return null;
+        }
+
+        private static string SlotLabel(string slot) => slot switch
+        {
+            "HairFront" => "Front hair",
+            "HairBack" => "Back hair",
+            "BaseHair" => "Base hair",
+            "HairSideburns" => "Side hair",
+            "HairHanege" => "Extensions",
+            "HairAhoge" => "Ahoge",
+            _ => slot.StartsWith("Hair") ? slot.Substring(4) + " hair" : slot,
+        };
+
+        /// <summary>Items found from bone names alone (accessories; hair when VRoid's group data can't be read).</summary>
+        private List<Item> FindItemsByBones(bool showAll)
         {
             var items = new Dictionary<string, Item>();
             if (!Avatar.Found) return new List<Item>();
@@ -157,17 +252,17 @@ namespace VRoidPlus
             return $"{what}  #{shortId}";
         }
 
-        public AnchorRule RuleFor(string itemId) => Data.Rules.FirstOrDefault(x => x.Item == itemId);
+        public AnchorRule RuleFor(string itemId) => Rules.FirstOrDefault(x => x.Item == itemId);
 
         public void SetRule(Item item, Transform target)
         {
             var old = RuleFor(item.Id);
-            Data.Rules.RemoveAll(x => x.Item == item.Id);
+            Rules.RemoveAll(x => x.Item == item.Id);
             if (target != null)
             {
                 var original = old?.OriginalBone;
                 if (string.IsNullOrEmpty(original)) original = item.CurrentAnchor != null ? item.CurrentAnchor.name : "";
-                Data.Rules.Add(new AnchorRule { Item = item.Id, TargetBone = target.name, OriginalBone = original });
+                Rules.Add(new AnchorRule { Item = item.Id, TargetBone = target.name, OriginalBone = original });
                 Save();
                 Apply(item, target);
             }
@@ -289,7 +384,7 @@ namespace VRoidPlus
         /// <summary>VRoid rebuilds items when you edit them, so rules are re-applied every second.</summary>
         public void Update()
         {
-            if (Data.Rules.Count == 0 || Time.unscaledTime < _nextCheck) return;
+            if (Rules.Count == 0 || Time.unscaledTime < _nextCheck) return;
             _nextCheck = Time.unscaledTime + 1f;
             if (!Avatar.Found) return;
 
@@ -297,7 +392,9 @@ namespace VRoidPlus
             var bonesByName = new Dictionary<string, Transform>();
             foreach (var b in Avatar.AllBones) if (b != null && !bonesByName.ContainsKey(b.name)) bonesByName[b.name] = b;
 
-            foreach (var item in FindItems(true))
+            var all = FindItems(false);
+            if (Which == Kind.Hair) all.AddRange(FindItemsByBones(true).Where(i => all.All(a => a.Id != i.Id)));
+            foreach (var item in all)
             {
                 var rule = RuleFor(item.Id);
                 if (rule == null || !bonesByName.TryGetValue(rule.TargetBone, out var target)) continue;

@@ -100,9 +100,14 @@ namespace VRoidPlus
             }
         }
 
+        /// <summary>One retargeter per model copy (editor model, photo mode models), keyed by instance id.</summary>
+        private readonly Dictionary<int, Retargeter> _perModel = new();
+
         public void Unload(bool clearStatus = true)
         {
             Retarget?.Release();
+            foreach (var r in _perModel.Values) r.Release();
+            _perModel.Clear();
             Scene = null; Retarget = null; FilePath = null;
             if (clearStatus) Status = "";
         }
@@ -126,7 +131,24 @@ namespace VRoidPlus
         {
             if (!Loaded) return;
             if (Avatar.Animator == null) { Unload(); Status = "Avatar was unloaded."; return; }
+            var main = Avatar.Animator;
             Retarget.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion);
+
+            // Photo mode shows its own copies of the model: drive those too.
+            var alive = new HashSet<int>();
+            foreach (var a in Avatar.AllHumanoids())
+            {
+                if (a == null || a == main) continue;
+                var id = a.GetInstanceID();
+                alive.Add(id);
+                if (!_perModel.TryGetValue(id, out var rt))
+                {
+                    try { rt = new Retargeter(Scene); rt.Attach(a); _perModel[id] = rt; }
+                    catch (Exception e) { Plugin.Logger.LogWarning("FBX on " + a.name + ": " + e.Message); continue; }
+                }
+                rt.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion);
+            }
+            foreach (var gone in _perModel.Keys.Where(k => !alive.Contains(k)).ToList()) _perModel.Remove(gone);
         }
     }
 }

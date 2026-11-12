@@ -81,7 +81,7 @@ namespace VRoidPlus
                 {
                     case 0: DrawFaceSets(); break;
                     case 1: DrawHairMerge(); break;
-                    case 2: DrawAnchors(Features.HairAnchors, "hair part"); break;
+                    case 2: DrawAnchors(Features.HairAnchors, "hair group"); break;
                     case 3: DrawBody(); break;
                     case 4: DrawAnchors(Features.AccessoryAnchors, "accessory"); break;
                     case 5: DrawPose(); break;
@@ -277,9 +277,11 @@ namespace VRoidPlus
         private void DrawAnchors(BoneAnchors anchors, string what)
         {
             Text($"Pick which bone each {what} follows instead of the one VRoid attaches it to. Pick any bone on the model.");
-            Hint("It keeps its current position and follows the chosen bone from then on. VRoid rebuilds items when you edit them; your choice is re-applied automatically. This changes the 3D preview; exporting is not covered yet.");
+            Hint("It keeps its current position and follows the chosen bone from then on. VRoid rebuilds items when you edit them; your choice is re-applied automatically. Changes are kept with the .vroid file when you save it in VRoid" +
+                 (ModelFile.Current.HasUnsavedChanges ? " - you have unsaved VRoid Plus changes." : "."));
             if (!Avatar.Found) { Text("No model is loaded."); return; }
-            var all = Ui.Toggle(_showAllParts, "Also show other items (clothing etc.)");
+            if (!string.IsNullOrEmpty(anchors.GroupNote)) Hint(anchors.GroupNote);
+            var all = Ui.Toggle(_showAllParts, anchors.Which == BoneAnchors.Kind.Hair ? "List by part and bones instead of by hair group" : "Also show other items (clothing etc.)");
             if (all != _showAllParts) { _showAllParts = all; _partsCacheTime = 0; }
 
             if (_partsCacheOwner != anchors || Time.unscaledTime > _partsCacheTime)
@@ -310,16 +312,25 @@ namespace VRoidPlus
 
             var file = body.File.Path != null ? System.IO.Path.GetFileName(body.File.Path) : "this new model (not saved yet)";
             Hint($"Values for {file}. They are saved together with the .vroid file when you save it in VRoid" +
-                 (body.File.HasUnsavedChanges ? " - you have unsaved slider changes." : "."));
+                 (body.File.HasUnsavedChanges ? " - you have unsaved VRoid Plus changes." : "."));
 
             bool changed = false;
             foreach (var def in BodySliders.Sliders.Where(d => !d.Extra)) changed |= Slider(def);
 
             Ui.Space(4);
-            if (Ui.Button(s.ShowMoreBodySliders ? "Hide more sliders" : "More sliders (neck, shoulders, chest, waist, hips, hands, feet)...", 0))
+            var extras = BodySliders.Sliders.Where(d => d.Extra).ToList();
+            int extrasChanged = extras.Count(d => !Mathf.Approximately(body.Get(d.Id), 1f));
+            if (Ui.Button(s.ShowMoreBodySliders ? "Hide more sliders" : $"More sliders ({extras.Count}: head, neck, torso, arms, hands, fingers, legs, feet){(extrasChanged > 0 ? $" - {extrasChanged} changed" : "")}...", 0))
             { s.ShowMoreBodySliders = !s.ShowMoreBodySliders; Settings.Save(); }
             if (s.ShowMoreBodySliders)
-                foreach (var def in BodySliders.Sliders.Where(d => d.Extra)) changed |= Slider(def);
+            {
+                string group = null;
+                foreach (var def in extras)
+                {
+                    if (def.Group != group) { group = def.Group; Header(group); }
+                    changed |= Slider(def);
+                }
+            }
 
             Ui.Space(4);
             if (Ui.Button("Reset all to 100%", 140)) { body.ResetAll(); changed = true; }

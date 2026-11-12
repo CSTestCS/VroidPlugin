@@ -131,7 +131,14 @@ namespace VRoidPlus
                 {
                     var matched = anchors.FindItems(false);
                     var all = anchors.FindItems(true);
-                    sb.AppendLine($"  matched {matched.Count}, all items {all.Count}");
+                    sb.AppendLine($"  matched {matched.Count}, all items {all.Count}; groups: {anchors.LastGroupInfo} {anchors.GroupNote}");
+                    if (anchors.Which == BoneAnchors.Kind.Hair)
+                    {
+                        var ctx = VRoidApi.Context(out _);
+                        var hg = ctx != null ? VRoidApi.HairGroups(ctx, out var herr) : null;
+                        foreach (var g in (hg ?? new List<VRoidApi.HairGroupInfo>()).Take(80))
+                            sb.AppendLine($"    group {g.Slot} '{g.Name}' id {g.GroupId} item {g.ItemPrefix}: {g.StrandIds.Count} strands, first {g.StrandIds.FirstOrDefault()}");
+                    }
                     foreach (var p in all.Take(60)) sb.AppendLine($"    {(p.IsHair ? "hair" : p.IsAccessory ? "accessory" : "other")}: {p.Label}: id {p.Id}, {p.Roots.Count} roots, {p.Meshes.Count} meshes, origin {(p.PartOrigin != null ? PathOf(p.PartOrigin) : "-")}, anchor {p.CurrentAnchor?.name}");
                 });
             }

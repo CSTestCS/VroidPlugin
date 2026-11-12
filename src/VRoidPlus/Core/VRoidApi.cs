@@ -83,6 +83,9 @@ namespace VRoidPlus
                 else if (blend != null) { p.Kind = "BlendShapeTransform"; p.Value = Convert.ToSingle(Get(blend, "Value") ?? 0f); }
                 else if (color != null && Get(color, "Color") is Color c) { p.Kind = "Color"; p.Color = c; }
                 else continue;
+                // The parameter list describes each slider (its value there is the default); ask the model
+                // for the value actually set on this avatar.
+                ReadCurrent(ctx, groupId, p);
                 list.Add(p);
             }
             return list;
@@ -114,6 +117,56 @@ namespace VRoidPlus
             }
             catch (Exception e) { return (e is TargetInvocationException t ? t.InnerException ?? e : e).Message; }
             return "unsupported kind " + p.Kind;
+        }
+
+        /// <summary>Overwrites p.Value / p.Color with the avatar's current setting (Model.Get…Parameter).</summary>
+        private static void ReadCurrent(object ctx, string groupId, Param p)
+        {
+            var model = Get(ctx, "ActiveModel");
+            if (model == null) return;
+            try
+            {
+                switch (p.Kind)
+                {
+                    case "BoneTransform":
+                    {
+                        var v = InvokeGetter(model, "GetBoneTransformParameter", groupId,
+                            MakePath("VRoidCore.Common.TransferableTypes.Path.BoneTransformPath", "VRoidCore.Common.TransferableTypes.Path.IBoneTransformPath", p.Key), true);
+                        if (v != null) p.Value = Convert.ToSingle(v);
+                        break;
+                    }
+                    case "BlendShapeTransform":
+                    {
+                        var v = InvokeGetter(model, "GetBlendShapeTransformParameter", groupId,
+                            MakePath("VRoidCore.Common.TransferableTypes.Path.BlendShapeTransformPath", "VRoidCore.Common.TransferableTypes.Path.IBlendShapeTransformPath", p.Key), false);
+                        if (v != null) p.Value = Convert.ToSingle(v);
+                        break;
+                    }
+                    case "Color":
+                    {
+                        var v = InvokeGetter(model, "GetColorParameter", groupId,
+                            MakePath("VRoidCore.Common.TransferableTypes.Path.ColorPath", "VRoidCore.Common.TransferableTypes.Path.IColorPath", p.Key), false);
+                        if (v is Color c) p.Color = c;
+                        break;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                _readFailures++;
+                if (_readFailures <= 3) Plugin.Logger.LogWarning($"Reading {p.Key}: {(e is TargetInvocationException t ? t.InnerException ?? e : e).Message}");
+            }
+        }
+
+        private static int _readFailures;
+
+        private static object InvokeGetter(object model, string method, string groupId, object path, bool hasTemplateArg)
+        {
+            if (path == null) return null;
+            var m = model.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(x => x.Name == method && x.GetParameters().Length == (hasTemplateArg ? 3 : 2));
+            if (m == null) return null;
+            return m.Invoke(model, hasTemplateArg ? new[] { groupId, path, null } : new[] { groupId, path });
         }
 
         private static string InvokeSetter(object model, string method, string groupId, object path, object value, bool hasTemplateArg)
@@ -152,6 +205,99 @@ namespace VRoidPlus
         {
             Call(ctx, "MarkNeedsUpdate", true, false);
             foreach (var id in groupIds) Call(ctx, "InvokeTranferableGroupParameterUpdated", id);
+        }
+
+        // ------------------------------------------------------------------ hair groups
+
+        public class HairGroupInfo
+        {
+            public string ItemPrefix;   // bone name prefix of the hair item, e.g. "e116d2fb…" (before ".transferable_")
+            public string Slot;         // HairFront, HairBack, BaseHair, HairSideburns, ...
+            public string GroupId;
+            public string Name;
+            public bool HasPhysicsBones;
+            public readonly HashSet<string> StrandIds = new();   // normalised: lower case, no dashes
+        }
+
+        public static string NormId(string id) => (id ?? "").Replace("-", "").ToLowerInvariant();
+
+        /// <summary>
+        /// Every hair group of every hair item on the open model, with its strand ids, read from VRoid's data
+        /// (item -> Collection.Addition.Hair.HairGroups -> Brush/ProceduralHairGroup -> strands).
+        /// Returns null (with error) if VRoid's data couldn't be read.
+        /// </summary>
+        public static List<HairGroupInfo> HairGroups(object ctx, out string error)
+        {
+            error = null;
+            var result = new List<HairGroupInfo>();
+            try
+            {
+                foreach (var g in Groups(ctx).Where(x => x.Type.Contains("Hair")))
+                {
+                    var slot = g.Type.Substring(g.Type.LastIndexOf('.') + 1);
+                    var transferables = Call(ctx, "CloneAndGetAllTransferablesInTransferableGroup", g.Id);
+                    if (transferables == null || !ListAccess.IsList(transferables)) continue;
+                    for (int t = 0; t < ListAccess.Count(transferables); t++)
+                    {
+                        var tr = ListAccess.Get(transferables, t);
+                        var trId = Get(Get(tr, "Header"), "Id") as string ?? "";
+                        var prefix = trId.EndsWith(".transferable") ? trId.Substring(0, trId.Length - ".transferable".Length) : trId;
+                        var hair = Get(Get(Get(tr, "Collection"), "Addition"), "Hair");
+                        var groups = Get(hair, "HairGroups");
+                        if (groups == null) continue;
+                        int n = Convert.ToInt32(Get(groups, "Count") ?? 0);
+                        for (int i = 0; i < n; i++)
+                        {
+                            var hg = Call(groups, "GetNthValue", i);
+                            var body = Get(hg, "BrushHairGroup") ?? Get(hg, "ProceduralHairGroup");
+                            if (body == null) continue;
+                            var info = new HairGroupInfo
+                            {
+                                ItemPrefix = prefix, Slot = slot,
+                                GroupId = Get(body, "Id") as string ?? $"{prefix}#{i}",
+                                Name = DisplayName(Get(body, "Name")) ?? $"Group {i + 1}",
+                            };
+                            CollectStrandIds(Get(body, "_hairs"), info.StrandIds);
+                            result.Add(info);
+                        }
+                    }
+                }
+            }
+            catch (Exception e) { error = (e is TargetInvocationException t ? t.InnerException ?? e : e).Message; return null; }
+            if (result.Count == 0) { error = "no hair groups found in VRoid's data"; return null; }
+            return result;
+        }
+
+        /// <summary>Strand ids from a BrushHairGroup's grouplets (paired/unpaired) or a ProceduralHairGroup's hairs.</summary>
+        private static void CollectStrandIds(object hairs, HashSet<string> into)
+        {
+            if (hairs == null || !ListAccess.IsList(hairs)) return;
+            for (int i = 0; i < ListAccess.Count(hairs); i++)
+            {
+                var h = ListAccess.Get(hairs, i);
+                if (h == null) continue;
+                // Procedural strand, or brush grouplet holding one or two strands.
+                var direct = Get(h, "ControlPoints") != null ? Get(h, "Id") as string : null;
+                if (direct != null) { into.Add(NormId(direct)); continue; }
+                var unpaired = Get(Get(h, "UnpairedGrouplet"), "Hair");
+                var paired = Get(h, "PairedGrouplet");
+                foreach (var strand in new[] { unpaired, Get(paired, "Hair0"), Get(paired, "Hair1") })
+                    if (Get(strand, "Id") is string sid) into.Add(NormId(sid));
+            }
+        }
+
+        /// <summary>A VRoid LocalizedString as text (user-defined name, then translation, then key).</summary>
+        public static string DisplayName(object localized)
+        {
+            if (localized == null) return null;
+            foreach (var m in new[] { "UserDefinedString", "FallbackString", "TranslatedString", "LocalizationKey", "Value" })
+            {
+                if (Get(localized, m) is string str && !string.IsNullOrWhiteSpace(str)) return str;
+            }
+            var proto = Call(localized, "ToProtobuf");
+            foreach (var m in new[] { "UserDefinedString", "FallbackString", "LocalizationKey" })
+                if (Get(proto, m) is string str && !string.IsNullOrWhiteSpace(str)) return str;
+            return null;
         }
 
         // ------------------------------------------------------------------ reflection helpers

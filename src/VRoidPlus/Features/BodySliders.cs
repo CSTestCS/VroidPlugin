@@ -19,7 +19,7 @@ namespace VRoidPlus
     /// (editor and photo mode). VRoid skins the body to "J_Adj_" helper bones under each main bone, so those
     /// count as part of the bone they hang from.
     ///
-    /// Values belong to the open .vroid file and are only stored when VRoid saves that file (see BodyFile).
+    /// Values belong to the open .vroid file and are only stored when VRoid saves that file (see ModelFile).
     /// </summary>
     internal class BodySliders
     {
@@ -27,33 +27,80 @@ namespace VRoidPlus
 
         public class SliderDef
         {
-            public string Id, Label;
+            public string Id, Label, Group;
             public bool Extra;               // shown under "More sliders"
             public Mode Mode;
             public (HumanBodyBones bone, HumanBodyBones toward)[] Segments;
         }
 
-        public static readonly SliderDef[] Sliders =
-        {
-            Def("bicep", "Bicep Size", false, Mode.Girth, (HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm), (HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm)),
-            Def("forearm", "Forearm Size", false, Mode.Girth, (HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand), (HumanBodyBones.RightLowerArm, HumanBodyBones.RightHand)),
-            Def("thigh", "Thigh Size", false, Mode.Girth, (HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg), (HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg)),
-            Def("calf", "Calf Size", false, Mode.Girth, (HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot), (HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot)),
+        private static (HumanBodyBones, HumanBodyBones)[] Both(HumanBodyBones l, HumanBodyBones lt, HumanBodyBones r, HumanBodyBones rt) => new[] { (l, lt), (r, rt) };
 
-            Def("neck", "Neck Size", true, Mode.Girth, (HumanBodyBones.Neck, HumanBodyBones.Head)),
-            Def("shoulder", "Shoulder Size", true, Mode.Girth, (HumanBodyBones.LeftShoulder, HumanBodyBones.LeftUpperArm), (HumanBodyBones.RightShoulder, HumanBodyBones.RightUpperArm)),
-            Def("upperchest", "Upper Chest Size", true, Mode.Girth, (HumanBodyBones.UpperChest, HumanBodyBones.Neck)),
-            Def("chest", "Chest Size", true, Mode.Girth, (HumanBodyBones.Chest, HumanBodyBones.UpperChest)),
-            Def("waist", "Waist Size", true, Mode.Girth, (HumanBodyBones.Spine, HumanBodyBones.Chest)),
-            Def("hips", "Hip Size", true, Mode.Girth, (HumanBodyBones.Hips, HumanBodyBones.Spine)),
-            Def("hand", "Hand Size", true, Mode.Size, (HumanBodyBones.LeftHand, HumanBodyBones.LeftMiddleProximal), (HumanBodyBones.RightHand, HumanBodyBones.RightMiddleProximal)),
-            Def("foot", "Foot Size", true, Mode.Size, (HumanBodyBones.LeftFoot, HumanBodyBones.LeftToes), (HumanBodyBones.RightFoot, HumanBodyBones.RightToes)),
+        private static (HumanBodyBones, HumanBodyBones)[] Arms() => Both(HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm)
+            .Concat(Both(HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand, HumanBodyBones.RightLowerArm, HumanBodyBones.RightHand)).ToArray();
+
+        private static (HumanBodyBones, HumanBodyBones)[] Legs() => Both(HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg)
+            .Concat(Both(HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot)).ToArray();
+
+        private static (HumanBodyBones, HumanBodyBones)[] Torso() => new[]
+        {
+            (HumanBodyBones.Hips, HumanBodyBones.Spine), (HumanBodyBones.Spine, HumanBodyBones.Chest),
+            (HumanBodyBones.Chest, HumanBodyBones.UpperChest), (HumanBodyBones.UpperChest, HumanBodyBones.Neck),
         };
 
-        private static SliderDef Def(string id, string label, bool extra, Mode mode, params (HumanBodyBones, HumanBodyBones)[] segs) =>
-            new() { Id = id, Label = label, Extra = extra, Mode = mode, Segments = segs };
+        /// <summary>Each finger bone's girth, measured along the finger (the last joint points back to the one before).</summary>
+        private static (HumanBodyBones, HumanBodyBones)[] Fingers(bool thumb)
+        {
+            var list = new List<(HumanBodyBones, HumanBodyBones)>();
+            foreach (var first in new[] { HumanBodyBones.LeftThumbProximal, HumanBodyBones.RightThumbProximal })
+            {
+                // Left hand bones run LeftThumbProximal..LeftLittleDistal (15), right hand the same from RightThumbProximal.
+                for (int f = thumb ? 0 : 1; f < (thumb ? 1 : 5); f++)
+                {
+                    var prox = (HumanBodyBones)((int)first + f * 3);
+                    var mid = prox + 1; var dist = prox + 2;
+                    list.Add((prox, mid)); list.Add((mid, dist)); list.Add((dist, mid));
+                }
+            }
+            return list.ToArray();
+        }
 
-        public readonly BodyFile File = new();
+        public static readonly SliderDef[] Sliders =
+        {
+            Def("bicep", "Bicep Size", "", false, Mode.Girth, Both(HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm)),
+            Def("forearm", "Forearm Size", "", false, Mode.Girth, Both(HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand, HumanBodyBones.RightLowerArm, HumanBodyBones.RightHand)),
+            Def("thigh", "Thigh Size", "", false, Mode.Girth, Both(HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg)),
+            Def("calf", "Calf Size", "", false, Mode.Girth, Both(HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot)),
+
+            Def("head", "Head Size", "Head & neck", true, Mode.Size, (HumanBodyBones.Head, HumanBodyBones.Neck)),
+            Def("neck", "Neck Thickness", "Head & neck", true, Mode.Girth, (HumanBodyBones.Neck, HumanBodyBones.Head)),
+
+            Def("shoulder", "Shoulder Size", "Torso", true, Mode.Girth, Both(HumanBodyBones.LeftShoulder, HumanBodyBones.LeftUpperArm, HumanBodyBones.RightShoulder, HumanBodyBones.RightUpperArm)),
+            Def("upperchest", "Upper Chest Size", "Torso", true, Mode.Girth, (HumanBodyBones.UpperChest, HumanBodyBones.Neck)),
+            Def("chest", "Chest Size", "Torso", true, Mode.Girth, (HumanBodyBones.Chest, HumanBodyBones.UpperChest)),
+            Def("waist", "Waist Size", "Torso", true, Mode.Girth, (HumanBodyBones.Spine, HumanBodyBones.Chest)),
+            Def("hips", "Hip Size", "Torso", true, Mode.Girth, (HumanBodyBones.Hips, HumanBodyBones.Spine)),
+            Def("torso", "Whole Torso Thickness", "Torso", true, Mode.Girth, Torso()),
+
+            Def("arm", "Whole Arm Thickness", "Arms & hands", true, Mode.Girth, Arms()),
+            Def("hand", "Hand Size", "Arms & hands", true, Mode.Size, Both(HumanBodyBones.LeftHand, HumanBodyBones.LeftMiddleProximal, HumanBodyBones.RightHand, HumanBodyBones.RightMiddleProximal)),
+            Def("handthick", "Hand Thickness", "Arms & hands", true, Mode.Girth, Both(HumanBodyBones.LeftHand, HumanBodyBones.LeftMiddleProximal, HumanBodyBones.RightHand, HumanBodyBones.RightMiddleProximal)),
+            Def("finger", "Finger Thickness", "Arms & hands", true, Mode.Girth, Fingers(false)),
+            Def("thumb", "Thumb Thickness", "Arms & hands", true, Mode.Girth, Fingers(true)),
+
+            Def("leg", "Whole Leg Thickness", "Legs & feet", true, Mode.Girth, Legs()),
+            Def("foot", "Foot Size", "Legs & feet", true, Mode.Size, Both(HumanBodyBones.LeftFoot, HumanBodyBones.LeftToes, HumanBodyBones.RightFoot, HumanBodyBones.RightToes)),
+            Def("footwidth", "Foot Width", "Legs & feet", true, Mode.Girth, Both(HumanBodyBones.LeftFoot, HumanBodyBones.LeftToes, HumanBodyBones.RightFoot, HumanBodyBones.RightToes)),
+            Def("toe", "Toe Size", "Legs & feet", true, Mode.Size, Both(HumanBodyBones.LeftToes, HumanBodyBones.LeftFoot, HumanBodyBones.RightToes, HumanBodyBones.RightFoot)),
+
+            Def("overall", "Overall Thickness", "Overall", true, Mode.Girth, Torso().Concat(Arms()).Concat(Legs())
+                .Concat(new[] { (HumanBodyBones.Neck, HumanBodyBones.Head) })
+                .Concat(Both(HumanBodyBones.LeftShoulder, HumanBodyBones.LeftUpperArm, HumanBodyBones.RightShoulder, HumanBodyBones.RightUpperArm)).ToArray()),
+        };
+
+        private static SliderDef Def(string id, string label, string group, bool extra, Mode mode, params (HumanBodyBones, HumanBodyBones)[] segs) =>
+            new() { Id = id, Label = label, Group = group, Extra = extra, Mode = mode, Segments = segs };
+
+        public ModelFile File => ModelFile.Current;
 
         public float Get(string id) => File.Values.TryGetValue(id, out var v) ? v : 1f;
 
@@ -89,7 +136,6 @@ namespace VRoidPlus
 
         public void Update()
         {
-            if (File.Update()) _dirty = true;   // another .vroid file was opened
             if (!_dirty && Time.unscaledTime < _nextCheck) return;
             _nextCheck = Time.unscaledTime + 1.5f;
             _dirty = false;
@@ -163,31 +209,41 @@ namespace VRoidPlus
                 }
             }
 
-            // Which segment does each bone slot of this mesh belong to?
+            // Which segments apply to each bone slot of this mesh? Several sliders can act on the same bone
+            // (e.g. Bicep and Whole Arm Thickness); their factors multiply.
             //  Girth: the main bone itself, or a J_Adj_ helper whose nearest main bone is it.
             //  Size:  the main bone or anything below it (fingers, toes, items attached there).
-            var segIndex = new int[bones.Length];
+            var girthSeg = new int[bones.Length];
+            var sizeSeg = new int[bones.Length];
+            var girthF = new float[bones.Length];
+            var sizeF = new float[bones.Length];
             bool any = false;
             for (int i = 0; i < bones.Length; i++)
             {
-                segIndex[i] = -1;
+                girthSeg[i] = sizeSeg[i] = -1;
+                girthF[i] = sizeF[i] = 1f;
                 var b = bones[i];
                 if (b == null) continue;
-                for (int s = 0; s < segs.Count && segIndex[i] < 0; s++)
+                var owner = rig.IsHumanoid(b) ? b : (b.name.StartsWith("J_Adj_", StringComparison.Ordinal) ? rig.HumanoidAncestor(b) : null);
+                for (int s = 0; s < segs.Count; s++)
                 {
-                    if (segs[s].Mode == Mode.Size)
+                    var seg = segs[s];
+                    if (seg.Mode == Mode.Size)
                     {
-                        if (b == segs[s].Bone || b.IsChildOf(segs[s].Bone)) segIndex[i] = s;
+                        if (b != seg.Bone && !b.IsChildOf(seg.Bone)) continue;
+                        // nearest enclosing size segment defines the pivot (e.g. toes inside the foot)
+                        if (sizeSeg[i] < 0 || seg.Bone.IsChildOf(segs[sizeSeg[i]].Bone)) sizeSeg[i] = s;
+                        sizeF[i] *= seg.Factor;
                     }
-                    else
+                    else if (owner != null && owner == seg.Bone)
                     {
-                        var owner = rig.IsHumanoid(b) ? b : (b.name.StartsWith("J_Adj_", StringComparison.Ordinal) ? rig.HumanoidAncestor(b) : null);
-                        if (owner != null && owner == segs[s].Bone) segIndex[i] = s;
+                        if (girthSeg[i] < 0) girthSeg[i] = s;
+                        girthF[i] *= seg.Factor;
                     }
                 }
-                if (segIndex[i] >= 0) any = true;
+                if (!Mathf.Approximately(girthF[i], 1f) || !Mathf.Approximately(sizeF[i], 1f)) any = true;
             }
-            if (!any) return;
+            if (!any && !_states.ContainsKey(mesh.GetInstanceID())) return;
 
             int id = mesh.GetInstanceID();
             var current = Copy.Vertices(mesh);
@@ -204,22 +260,25 @@ namespace VRoidPlus
             var bind = Copy.BindPoses(mesh);
             if (weights.Length != st.Original.Length || bind.Length != bones.Length) return;
 
-            // Per bone slot: the segment's start joint and axis in that bone's local space, mode and factor.
-            var axisStart = new Vector3[bones.Length];
-            var axis = new Vector3[bones.Length];
-            var factor = new float[bones.Length];
-            var size = new bool[bones.Length];
+            // Per bone slot, in that bone's local space: the girth axis (start joint and direction) and the
+            // size pivot, with their factors.
+            var girthStart = new Vector3[bones.Length];
+            var girthAxis = new Vector3[bones.Length];
+            var sizePivot = new Vector3[bones.Length];
             var bindInv = new Matrix4x4[bones.Length];
+            var active = new bool[bones.Length];
             for (int i = 0; i < bones.Length; i++)
             {
-                factor[i] = 1f;
-                if (segIndex[i] < 0) continue;
-                var seg = segs[segIndex[i]];
-                axisStart[i] = bones[i].InverseTransformPoint(seg.Bone.position);
-                axis[i] = bones[i].InverseTransformPoint(seg.Toward.position) - axisStart[i];
-                factor[i] = seg.Factor;
-                size[i] = seg.Mode == Mode.Size;
+                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f)) continue;
+                active[i] = true;
                 bindInv[i] = bind[i].inverse;
+                if (girthSeg[i] >= 0)
+                {
+                    var g = segs[girthSeg[i]];
+                    girthStart[i] = bones[i].InverseTransformPoint(g.Bone.position);
+                    girthAxis[i] = bones[i].InverseTransformPoint(g.Toward.position) - girthStart[i];
+                }
+                if (sizeSeg[i] >= 0) sizePivot[i] = bones[i].InverseTransformPoint(segs[sizeSeg[i]].Bone.position);
             }
 
             var result = new Vector3[st.Original.Length];
@@ -228,10 +287,10 @@ namespace VRoidPlus
                 var p = st.Original[v];
                 var w = weights[v];
                 var delta = Vector3.zero;
-                delta += Push(p, w.boneIndex0, w.weight0, axisStart, axis, factor, size, bind, bindInv);
-                delta += Push(p, w.boneIndex1, w.weight1, axisStart, axis, factor, size, bind, bindInv);
-                delta += Push(p, w.boneIndex2, w.weight2, axisStart, axis, factor, size, bind, bindInv);
-                delta += Push(p, w.boneIndex3, w.weight3, axisStart, axis, factor, size, bind, bindInv);
+                delta += Push(p, w.boneIndex0, w.weight0, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
+                delta += Push(p, w.boneIndex1, w.weight1, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
+                delta += Push(p, w.boneIndex2, w.weight2, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
+                delta += Push(p, w.boneIndex3, w.weight3, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
                 result[v] = p + delta;
             }
 
@@ -242,25 +301,30 @@ namespace VRoidPlus
             Applied++;
         }
 
-        private static Vector3 Push(Vector3 meshPos, int bi, float w, Vector3[] axisStart, Vector3[] axis, float[] factor, bool[] size,
+        private static Vector3 Push(Vector3 meshPos, int bi, float w, bool[] active,
+            Vector3[] girthStart, Vector3[] girthAxis, float[] girthF, Vector3[] sizePivot, float[] sizeF,
             Matrix4x4[] bind, Matrix4x4[] bindInv)
         {
-            if (w <= 0f || bi < 0 || bi >= factor.Length || Mathf.Approximately(factor[bi], 1f)) return Vector3.zero;
-            var local = bind[bi].MultiplyPoint3x4(meshPos) - axisStart[bi];
-            Vector3 localDelta;
-            if (size[bi])
+            if (w <= 0f || bi < 0 || bi >= active.Length || !active[bi]) return Vector3.zero;
+            var local = bind[bi].MultiplyPoint3x4(meshPos);
+            var localDelta = Vector3.zero;
+
+            // Girth: push away from (or toward) the bone's axis.
+            if (!Mathf.Approximately(girthF[bi], 1f))
             {
-                localDelta = local * (factor[bi] - 1f);                 // scale evenly around the joint
-            }
-            else
-            {
-                var a = axis[bi];
+                var a = girthAxis[bi];
                 var len2 = a.sqrMagnitude;
-                if (len2 < 1e-8f) return Vector3.zero;
-                var t = Mathf.Clamp01(Vector3.Dot(local, a) / len2);
-                var radial = local - a * t;
-                localDelta = radial * (factor[bi] - 1f);                // push away from the bone's axis
+                if (len2 > 1e-8f)
+                {
+                    var rel = local - girthStart[bi];
+                    var t = Mathf.Clamp01(Vector3.Dot(rel, a) / len2);
+                    localDelta += (rel - a * t) * (girthF[bi] - 1f);
+                }
             }
+            // Size: scale evenly around the joint (applied to the girth-adjusted position).
+            if (!Mathf.Approximately(sizeF[bi], 1f))
+                localDelta += (local + localDelta - sizePivot[bi]) * (sizeF[bi] - 1f);
+
             return bindInv[bi].MultiplyVector(localDelta) * w;
         }
 
@@ -274,28 +338,43 @@ namespace VRoidPlus
     }
 
     /// <summary>
-    /// Body slider values for the open .vroid file. They're kept in memory while you edit and written to
-    /// BepInEx/config/VRoidPlus/models/ only when VRoid saves the file (its timestamp changes, or Save As
-    /// gives it a new path). Opening a file loads its values; a new, never-saved model starts at 100%.
+    /// Per-.vroid-file settings: body slider values and hair/accessory anchor rules. They're kept in memory
+    /// while you edit and written to BepInEx/config/VRoidPlus/models/ only when VRoid saves the file (its
+    /// timestamp changes, or Save As gives it a new path). Opening a file loads its settings; a new,
+    /// never-saved model starts with none.
     /// </summary>
-    internal class BodyFile
+    internal class ModelFile
     {
+        public static readonly ModelFile Current = new();
+
         public Dictionary<string, float> Values = new();
-        private Dictionary<string, float> _saved = new();
+        public List<AnchorRule> HairAnchors = new();
+        public List<AnchorRule> AccessoryAnchors = new();
+        private string _savedJson = "";
         public string Path { get; private set; }
         private object _engine;
         private DateTime _mtime;
         private float _nextPoll;
 
-        public bool HasUnsavedChanges =>
-            Values.Count != _saved.Count || Values.Any(kv => !_saved.TryGetValue(kv.Key, out var s) || !Mathf.Approximately(s, kv.Value));
+        /// <summary>Raised when another model is opened and its settings were loaded.</summary>
+        public event Action Loaded;
 
         public class FileData
         {
             public string Path = "";
             public string SavedAt = "";
             public Dictionary<string, float> Values = new();
+            public List<AnchorRule> HairAnchors = new();
+            public List<AnchorRule> AccessoryAnchors = new();
         }
+
+        private string Snapshot() => System.Text.Json.JsonSerializer.Serialize(new FileData
+        {
+            Values = new SortedDictionary<string, float>(Values).ToDictionary(k => k.Key, k => k.Value),
+            HairAnchors = HairAnchors, AccessoryAnchors = AccessoryAnchors,
+        }, Json.Options);
+
+        public bool HasUnsavedChanges => Snapshot() != _savedJson;
 
         private static string StorePath(string vroidPath)
         {
@@ -311,22 +390,21 @@ namespace VRoidPlus
             catch { return DateTime.MinValue; }
         }
 
-        /// <summary>Polls VRoid once a second. Returns true when a different model was opened (values replaced).</summary>
-        public bool Update()
+        /// <summary>Polls VRoid once a second for an opened file, Save and Save As.</summary>
+        public void Update()
         {
-            if (Time.unscaledTime < _nextPoll) return false;
+            if (Time.unscaledTime < _nextPoll) return;
             _nextPoll = Time.unscaledTime + 1f;
 
             var model = VRoidApi.FromViewModel("CurrentFile.model", out _);
             var engine = VRoidApi.Get(model, "engine");
-            if (engine == null) return false;
+            if (engine == null) return;
             var engineId = Compat.Identity(engine);
             var path = VRoidApi.Get(model, "path") as string;
             if (string.IsNullOrEmpty(path)) path = null;
 
             if (!Equals(engineId, _engine))
             {
-                // A model was opened or created: load what was saved with it.
                 bool firstModel = _engine == null;
                 _engine = engineId;
                 var previousPath = Path;
@@ -334,20 +412,25 @@ namespace VRoidPlus
                 _mtime = MTime(path);
                 bool hasStored = path != null && System.IO.File.Exists(StorePath(path));
                 bool justWritten = _mtime != DateTime.MinValue && (DateTime.UtcNow - _mtime).TotalSeconds < 15;
-                if (!firstModel && path != null && path != previousPath && !hasStored && justWritten && Values.Count > 0)
+                if (!firstModel && path != null && path != previousPath && !hasStored && justWritten && HasUnsavedChanges)
                 {
-                    // Looks like "Save As" of the model being edited: keep the current values with the new file.
+                    // Looks like "Save As" of the model being edited: keep the current settings with the new file.
                     Persist();
-                    return false;
+                    return;
                 }
                 Values = new Dictionary<string, float>();
+                HairAnchors = new List<AnchorRule>();
+                AccessoryAnchors = new List<AnchorRule>();
                 if (hasStored)
                 {
                     var data = Json.Read<FileData>(StorePath(path));
                     foreach (var kv in data.Values) Values[kv.Key] = kv.Value;
+                    HairAnchors = data.HairAnchors ?? new List<AnchorRule>();
+                    AccessoryAnchors = data.AccessoryAnchors ?? new List<AnchorRule>();
                 }
-                _saved = new Dictionary<string, float>(Values);
-                return true;
+                _savedJson = Snapshot();
+                Loaded?.Invoke();
+                return;
             }
 
             if (path != Path && path != null)
@@ -362,17 +445,21 @@ namespace VRoidPlus
                 var m = MTime(path);
                 if (m > _mtime) { _mtime = m; Persist(); }   // VRoid wrote the file: the user saved
             }
-            return false;
         }
 
         private void Persist()
         {
             if (Path == null) return;
             var file = StorePath(Path);
-            if (Values.Count == 0 && !System.IO.File.Exists(file)) { _saved = new Dictionary<string, float>(); return; }
-            Json.Write(file, new FileData { Path = Path, SavedAt = DateTime.Now.ToString("s"), Values = new Dictionary<string, float>(Values) });
-            _saved = new Dictionary<string, float>(Values);
-            Plugin.Logger.LogInfo($"Body sliders saved with {System.IO.Path.GetFileName(Path)}");
+            var snap = Snapshot();
+            if (Values.Count == 0 && HairAnchors.Count == 0 && AccessoryAnchors.Count == 0 && !System.IO.File.Exists(file)) { _savedJson = snap; return; }
+            Json.Write(file, new FileData
+            {
+                Path = Path, SavedAt = DateTime.Now.ToString("s"), Values = new Dictionary<string, float>(Values),
+                HairAnchors = HairAnchors, AccessoryAnchors = AccessoryAnchors,
+            });
+            _savedJson = snap;
+            Plugin.Logger.LogInfo($"VRoid Plus settings saved with {System.IO.Path.GetFileName(Path)}");
         }
     }
 

@@ -48,7 +48,19 @@ namespace VRoidPlus
             var hips = best != null ? best.GetBoneTransform(HumanBodyBones.Hips) : null;
             bool changed = best != _animator || !alive || (hips != null && Bones.TryGetValue(HumanBodyBones.Hips, out var oldHips) && oldHips != hips);
             _animator = best;
-            if (!changed) return;
+            if (!changed)
+            {
+                // Same model, but VRoid adds/rebuilds hair and items while you edit: refresh the bone list.
+                if (hips != null)
+                {
+                    var r = hips.parent != null ? hips.parent : hips;
+                    var fresh = new List<Transform>();
+                    foreach (var t in r.GetComponentsInChildren<Transform>(true)) if (t != null) fresh.Add(t);
+                    if (fresh.Count != _allBones.Count) Generation++;
+                    _allBones = fresh;
+                }
+                return;
+            }
 
             Bones.Clear(); HumanSet.Clear(); _allBones = new List<Transform>();
             if (best == null) return;

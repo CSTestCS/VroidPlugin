@@ -19,7 +19,7 @@
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <GenerateDependencyFile>false</GenerateDependencyFile>
     <NoWarn>$(NoWarn);CS0618;CS0436;MSB3277;MSB3243</NoWarn>
-    <Version>0.1.6</Version>
+    <Version>0.1.7</Version>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(GameDir)' != ''">
