@@ -7,7 +7,7 @@ An unofficial plugin for the **Steam version of VRoid Studio** (1.26.1 or newer)
 | **Custom face sets**: save every face selection and slider under a name and load it onto any model, like the built-in face sets | *Face Sets* tab |
 | **Hair merge**: add the hair groups of any hairstyle (built-in or custom; Front, Back, Overall Hair, Extensions, Side, Ahoge, Extra) to the hairstyle you're editing, keeping its own groups | *Hair Merge* tab |
 | **Hair anchor bones**: make a hair group follow any bone on the model instead of the head | *Hair Anchors* tab |
-| **Extra body sliders**: Bicep, Forearm, Thigh and Calf size, plus 18 more under *More sliders* (head, neck, torso, arms, hands, fingers, legs, feet, overall). Saved per `.vroid` file | *Body* tab |
+| **Extra body sliders**: Bicep, Forearm, Thigh and Calf size, plus 19 more under *More sliders* (head, neck, torso, arms, hands, fingers, legs, feet, overall). Saved per `.vroid` file | *Body* tab |
 | **Accessory anchor bones**: same as hair anchors, for accessories | *Accessories* tab |
 | **Expanded pose editor**: *Show Controller* starts off, and you can load **.fbx** poses and animations (play/pause, like built-in animations) | *Pose* tab |
 
@@ -61,10 +61,10 @@ Each hair group (as VRoid's hair editor lists them, with or without physics) or 
 If a part is missing from the list, tick **Show every mesh**.
 
 ### Body
-Bicep, Forearm, Thigh and Calf size are always shown. Press **More sliders...** for 18 more, grouped as:
+Bicep, Forearm, Thigh and Calf size are always shown. Press **More sliders...** for 19 more, grouped as:
 
 - **Head & neck:** Head Size, Neck Thickness
-- **Torso:** Shoulder, Upper Chest, Chest, Waist, Hip, Whole Torso Thickness
+- **Torso:** Shoulder, Upper Chest, Chest, Waist, Hip, Butt, Whole Torso Thickness
 - **Arms & hands:** Whole Arm Thickness, Hand Size, Hand Thickness, Finger Thickness, Thumb Thickness
 - **Legs & feet:** Whole Leg Thickness, Foot Size, Foot Width, Toe Size
 - **Overall:** Overall Thickness

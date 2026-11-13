@@ -23,7 +23,7 @@ namespace VRoidPlus
     /// </summary>
     internal class BodySliders
     {
-        public enum Mode { Girth, Size }
+        public enum Mode { Girth, Size, Rear }
 
         public class SliderDef
         {
@@ -79,6 +79,8 @@ namespace VRoidPlus
             Def("chest", "Chest Size", "Torso", true, Mode.Girth, (HumanBodyBones.Chest, HumanBodyBones.UpperChest)),
             Def("waist", "Waist Size", "Torso", true, Mode.Girth, (HumanBodyBones.Spine, HumanBodyBones.Chest)),
             Def("hips", "Hip Size", "Torso", true, Mode.Girth, (HumanBodyBones.Hips, HumanBodyBones.Spine)),
+            Def("butt", "Butt Size", "Torso", true, Mode.Rear, (HumanBodyBones.Hips, HumanBodyBones.Spine),
+                (HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg), (HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg)),
             Def("torso", "Whole Torso Thickness", "Torso", true, Mode.Girth, Torso()),
 
             Def("arm", "Whole Arm Thickness", "Arms & hands", true, Mode.Girth, Arms()),
@@ -180,6 +182,20 @@ namespace VRoidPlus
             }
 
             public Transform Bone(HumanBodyBones b) => _bones.TryGetValue(b, out var t) ? t : null;
+
+            /// <summary>The model's backward direction (world space), from its own skeleton so facing doesn't matter.</summary>
+            public Vector3 Back
+            {
+                get
+                {
+                    var l = Bone(HumanBodyBones.LeftUpperLeg); var r = Bone(HumanBodyBones.RightUpperLeg);
+                    var hips = Bone(HumanBodyBones.Hips); var spine = Bone(HumanBodyBones.Spine);
+                    if (l == null || r == null || hips == null || spine == null) return Vector3.back;
+                    var forward = Vector3.Cross(r.position - l.position, spine.position - hips.position);
+                    return forward.sqrMagnitude > 1e-10f ? -forward.normalized : Vector3.back;
+                }
+            }
+
             public bool IsHumanoid(Transform t) => t != null && _human.Contains(t.GetInstanceID());
 
             public Transform HumanoidAncestor(Transform t)
@@ -215,13 +231,15 @@ namespace VRoidPlus
             //  Size:  the main bone or anything below it (fingers, toes, items attached there).
             var girthSeg = new int[bones.Length];
             var sizeSeg = new int[bones.Length];
+            var rearSeg = new int[bones.Length];
             var girthF = new float[bones.Length];
             var sizeF = new float[bones.Length];
+            var rearF = new float[bones.Length];
             bool any = false;
             for (int i = 0; i < bones.Length; i++)
             {
-                girthSeg[i] = sizeSeg[i] = -1;
-                girthF[i] = sizeF[i] = 1f;
+                girthSeg[i] = sizeSeg[i] = rearSeg[i] = -1;
+                girthF[i] = sizeF[i] = rearF[i] = 1f;
                 var b = bones[i];
                 if (b == null) continue;
                 var owner = rig.IsHumanoid(b) ? b : (b.name.StartsWith("J_Adj_", StringComparison.Ordinal) ? rig.HumanoidAncestor(b) : null);
@@ -237,11 +255,19 @@ namespace VRoidPlus
                     }
                     else if (owner != null && owner == seg.Bone)
                     {
-                        if (girthSeg[i] < 0) girthSeg[i] = s;
-                        girthF[i] *= seg.Factor;
+                        if (seg.Mode == Mode.Rear)
+                        {
+                            if (rearSeg[i] < 0) rearSeg[i] = s;
+                            rearF[i] *= seg.Factor;
+                        }
+                        else
+                        {
+                            if (girthSeg[i] < 0) girthSeg[i] = s;
+                            girthF[i] *= seg.Factor;
+                        }
                     }
                 }
-                if (!Mathf.Approximately(girthF[i], 1f) || !Mathf.Approximately(sizeF[i], 1f)) any = true;
+                if (!Mathf.Approximately(girthF[i], 1f) || !Mathf.Approximately(sizeF[i], 1f) || !Mathf.Approximately(rearF[i], 1f)) any = true;
             }
             if (!any && !_states.ContainsKey(mesh.GetInstanceID())) return;
 
@@ -260,25 +286,31 @@ namespace VRoidPlus
             var bind = Copy.BindPoses(mesh);
             if (weights.Length != st.Original.Length || bind.Length != bones.Length) return;
 
-            // Per bone slot, in that bone's local space: the girth axis (start joint and direction) and the
-            // size pivot, with their factors.
-            var girthStart = new Vector3[bones.Length];
-            var girthAxis = new Vector3[bones.Length];
-            var sizePivot = new Vector3[bones.Length];
-            var bindInv = new Matrix4x4[bones.Length];
-            var active = new bool[bones.Length];
+            // Per bone slot, in that bone's local space: the girth axis (start joint and direction), the size
+            // pivot and the rear (butt) axis with the model's backward direction, plus their factors.
+            var d = new Slots(bones.Length) { GirthF = girthF, SizeF = sizeF, RearF = rearF, Bind = bind };
+            var back = rig.Back;
             for (int i = 0; i < bones.Length; i++)
             {
-                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f)) continue;
-                active[i] = true;
-                bindInv[i] = bind[i].inverse;
+                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f) && Mathf.Approximately(rearF[i], 1f)) continue;
+                d.Active[i] = true;
+                d.BindInv[i] = bind[i].inverse;
                 if (girthSeg[i] >= 0)
                 {
                     var g = segs[girthSeg[i]];
-                    girthStart[i] = bones[i].InverseTransformPoint(g.Bone.position);
-                    girthAxis[i] = bones[i].InverseTransformPoint(g.Toward.position) - girthStart[i];
+                    d.GirthStart[i] = bones[i].InverseTransformPoint(g.Bone.position);
+                    d.GirthAxis[i] = bones[i].InverseTransformPoint(g.Toward.position) - d.GirthStart[i];
                 }
-                if (sizeSeg[i] >= 0) sizePivot[i] = bones[i].InverseTransformPoint(segs[sizeSeg[i]].Bone.position);
+                if (sizeSeg[i] >= 0) d.SizePivot[i] = bones[i].InverseTransformPoint(segs[sizeSeg[i]].Bone.position);
+                if (rearSeg[i] >= 0)
+                {
+                    var r = segs[rearSeg[i]];
+                    d.RearStart[i] = bones[i].InverseTransformPoint(r.Bone.position);
+                    d.RearAxis[i] = bones[i].InverseTransformPoint(r.Toward.position) - d.RearStart[i];
+                    d.RearBack[i] = bones[i].InverseTransformDirection(back).normalized;
+                    // On the thighs only the top part belongs to the buttocks; fade out 40% of the way to the knee.
+                    d.RearFade[i] = rig.IsHumanoid(r.Bone) && r.Bone == rig.Bone(HumanBodyBones.Hips) ? 0f : 0.4f;
+                }
             }
 
             var result = new Vector3[st.Original.Length];
@@ -287,10 +319,10 @@ namespace VRoidPlus
                 var p = st.Original[v];
                 var w = weights[v];
                 var delta = Vector3.zero;
-                delta += Push(p, w.boneIndex0, w.weight0, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
-                delta += Push(p, w.boneIndex1, w.weight1, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
-                delta += Push(p, w.boneIndex2, w.weight2, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
-                delta += Push(p, w.boneIndex3, w.weight3, active, girthStart, girthAxis, girthF, sizePivot, sizeF, bind, bindInv);
+                delta += Push(p, w.boneIndex0, w.weight0, d);
+                delta += Push(p, w.boneIndex1, w.weight1, d);
+                delta += Push(p, w.boneIndex2, w.weight2, d);
+                delta += Push(p, w.boneIndex3, w.weight3, d);
                 result[v] = p + delta;
             }
 
@@ -301,31 +333,77 @@ namespace VRoidPlus
             Applied++;
         }
 
-        private static Vector3 Push(Vector3 meshPos, int bi, float w, bool[] active,
-            Vector3[] girthStart, Vector3[] girthAxis, float[] girthF, Vector3[] sizePivot, float[] sizeF,
-            Matrix4x4[] bind, Matrix4x4[] bindInv)
+        /// <summary>Per-bone-slot deformation data for one mesh.</summary>
+        private class Slots
         {
-            if (w <= 0f || bi < 0 || bi >= active.Length || !active[bi]) return Vector3.zero;
-            var local = bind[bi].MultiplyPoint3x4(meshPos);
+            public readonly bool[] Active;
+            public readonly Vector3[] GirthStart, GirthAxis, SizePivot, RearStart, RearAxis, RearBack;
+            public readonly float[] RearFade;
+            public readonly Matrix4x4[] BindInv;
+            public float[] GirthF, SizeF, RearF;
+            public Matrix4x4[] Bind;
+
+            public Slots(int n)
+            {
+                Active = new bool[n];
+                GirthStart = new Vector3[n]; GirthAxis = new Vector3[n]; SizePivot = new Vector3[n];
+                RearStart = new Vector3[n]; RearAxis = new Vector3[n]; RearBack = new Vector3[n];
+                RearFade = new float[n];
+                BindInv = new Matrix4x4[n];
+            }
+        }
+
+        private static Vector3 Push(Vector3 meshPos, int bi, float w, Slots d)
+        {
+            if (w <= 0f || bi < 0 || bi >= d.Active.Length || !d.Active[bi]) return Vector3.zero;
+            var local = d.Bind[bi].MultiplyPoint3x4(meshPos);
             var localDelta = Vector3.zero;
 
             // Girth: push away from (or toward) the bone's axis.
-            if (!Mathf.Approximately(girthF[bi], 1f))
+            if (!Mathf.Approximately(d.GirthF[bi], 1f))
             {
-                var a = girthAxis[bi];
+                var a = d.GirthAxis[bi];
                 var len2 = a.sqrMagnitude;
                 if (len2 > 1e-8f)
                 {
-                    var rel = local - girthStart[bi];
+                    var rel = local - d.GirthStart[bi];
                     var t = Mathf.Clamp01(Vector3.Dot(rel, a) / len2);
-                    localDelta += (rel - a * t) * (girthF[bi] - 1f);
+                    localDelta += (rel - a * t) * (d.GirthF[bi] - 1f);
                 }
             }
-            // Size: scale evenly around the joint (applied to the girth-adjusted position).
-            if (!Mathf.Approximately(sizeF[bi], 1f))
-                localDelta += (local + localDelta - sizePivot[bi]) * (sizeF[bi] - 1f);
 
-            return bindInv[bi].MultiplyVector(localDelta) * w;
+            // Rear (butt): like girth, but only for the part of the surface facing backwards, and on the thighs
+            // only near the hip.
+            if (!Mathf.Approximately(d.RearF[bi], 1f))
+            {
+                var a = d.RearAxis[bi];
+                var len2 = a.sqrMagnitude;
+                if (len2 > 1e-8f)
+                {
+                    var rel = local - d.RearStart[bi];
+                    var tRaw = Vector3.Dot(rel, a) / len2;
+                    var radial = rel - a * Mathf.Clamp01(tRaw);
+                    var r = radial.magnitude;
+                    if (r > 1e-6f)
+                    {
+                        // backward direction, flattened onto the cross-section of the bone
+                        var back = Vector3.ProjectOnPlane(d.RearBack[bi], a).normalized;
+                        var facing = Vector3.Dot(radial / r, back);
+                        if (facing > 0f)
+                        {
+                            var fade = d.RearFade[bi] > 0f ? Mathf.Clamp01(1f - Mathf.Max(0f, tRaw) / d.RearFade[bi]) : 1f;
+                            fade = fade * fade * (3f - 2f * fade);              // smooth edge
+                            localDelta += radial * ((d.RearF[bi] - 1f) * facing * facing * fade);
+                        }
+                    }
+                }
+            }
+
+            // Size: scale evenly around the joint (applied to the adjusted position).
+            if (!Mathf.Approximately(d.SizeF[bi], 1f))
+                localDelta += (local + localDelta - d.SizePivot[bi]) * (d.SizeF[bi] - 1f);
+
+            return d.BindInv[bi].MultiplyVector(localDelta) * w;
         }
 
         private static bool SameAs(Vector3[] a, Vector3[] b)
