@@ -23,7 +23,7 @@ namespace VRoidPlus
     /// </summary>
     internal class BodySliders
     {
-        public enum Mode { Girth, Size, Rear }
+        public enum Mode { Girth, Size, Rear, Width }
 
         public class SliderDef
         {
@@ -79,6 +79,8 @@ namespace VRoidPlus
             Def("chest", "Chest Size", "Torso", true, Mode.Girth, (HumanBodyBones.Chest, HumanBodyBones.UpperChest)),
             Def("waist", "Waist Size", "Torso", true, Mode.Girth, (HumanBodyBones.Spine, HumanBodyBones.Chest)),
             Def("hips", "Hip Size", "Torso", true, Mode.Girth, (HumanBodyBones.Hips, HumanBodyBones.Spine)),
+            Def("hipwidth", "Hip Width", "Torso", true, Mode.Width, (HumanBodyBones.Hips, HumanBodyBones.Spine),
+                (HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg), (HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg)),
             Def("butt", "Butt Size", "Torso", true, Mode.Rear, (HumanBodyBones.Hips, HumanBodyBones.Spine),
                 (HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg), (HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg)),
             Def("torso", "Whole Torso Thickness", "Torso", true, Mode.Girth, Torso()),
@@ -136,33 +138,52 @@ namespace VRoidPlus
 
         private string Key() => string.Join("|", Sliders.Select(s => Get(s.Id).ToString("F3")));
 
-        public void Update()
+        /// <summary>smr instance id -> mesh instance id last seen (VRoid swapping a mesh shows up here at once)</summary>
+        private readonly Dictionary<int, int> _meshOf = new();
+        /// <summary>"meshId|key" of meshes no slider touches, so they're skipped without copying vertices</summary>
+        private readonly HashSet<string> _unaffected = new();
+        private string _lastKey = "";
+
+        /// <summary>
+        /// Called every frame from LateUpdate (after VRoid's updates, before drawing).
+        ///  - Every frame: meshes VRoid just replaced are reshaped immediately.
+        ///  - fast (shortly after VRoid edited the model) or every 1.5 s: every mesh is checked, which also
+        ///    catches meshes VRoid rewrote in place.
+        /// </summary>
+        public void Tick(bool fast)
         {
-            if (!_dirty && Time.unscaledTime < _nextCheck) return;
-            _nextCheck = Time.unscaledTime + 1.5f;
-            _dirty = false;
+            bool periodic = _dirty || Time.unscaledTime >= _nextCheck;
+            if (periodic) { _nextCheck = Time.unscaledTime + 1.5f; _dirty = false; }
             if (!Avatar.Found) return;
             if (AllDefault && _states.Count == 0) return;
 
             int seen = 0, unreadable = 0, noMesh = 0, models = 0;
             var key = Key();
-            // Every copy of the avatar (editor model, photo mode models), each with its own skeleton.
+            if (key != _lastKey) { _unaffected.Clear(); _lastKey = key; }
             foreach (var animator in Avatar.AllHumanoids())
             {
                 if (animator == null) continue;
                 models++;
-                var rig = new Rig(animator);
+                Rig rig = null;
                 foreach (var smr in animator.GetComponentsInChildren<SkinnedMeshRenderer>(false))
                 {
                     if (smr == null) continue;
                     var mesh = smr.sharedMesh;
                     seen++;
                     if (mesh == null) { noMesh++; continue; }
+                    var smrId = smr.GetInstanceID();
+                    var meshId = mesh.GetInstanceID();
+                    bool swapped = !_meshOf.TryGetValue(smrId, out var last) || last != meshId;
+                    _meshOf[smrId] = meshId;
+                    if (!(periodic || fast || swapped)) continue;
+                    if (_unaffected.Contains(meshId + "|" + key)) continue;
                     if (!mesh.isReadable) { unreadable++; continue; }
+                    rig ??= new Rig(animator);
                     Process(smr, mesh, key, rig);
                 }
             }
-            LastInfo = $"{Time.unscaledTime:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, key {key}, file {File.Path ?? "(unsaved)"}";
+            if (periodic)
+                LastInfo = $"{Time.unscaledTime:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, key {key}, file {File.Path ?? "(unsaved)"}";
         }
 
         /// <summary>One model's skeleton: its humanoid bones and helpers to classify other bones.</summary>
@@ -182,6 +203,17 @@ namespace VRoidPlus
             }
 
             public Transform Bone(HumanBodyBones b) => _bones.TryGetValue(b, out var t) ? t : null;
+
+            /// <summary>The model's left-to-right direction (world space).</summary>
+            public Vector3 Right
+            {
+                get
+                {
+                    var l = Bone(HumanBodyBones.LeftUpperLeg); var r = Bone(HumanBodyBones.RightUpperLeg);
+                    var d = l != null && r != null ? r.position - l.position : Vector3.right;
+                    return d.sqrMagnitude > 1e-10f ? d.normalized : Vector3.right;
+                }
+            }
 
             /// <summary>The model's backward direction (world space), from its own skeleton so facing doesn't matter.</summary>
             public Vector3 Back
@@ -232,14 +264,16 @@ namespace VRoidPlus
             var girthSeg = new int[bones.Length];
             var sizeSeg = new int[bones.Length];
             var rearSeg = new int[bones.Length];
+            var widthSeg = new int[bones.Length];
+            var widthF = new float[bones.Length];
             var girthF = new float[bones.Length];
             var sizeF = new float[bones.Length];
             var rearF = new float[bones.Length];
             bool any = false;
             for (int i = 0; i < bones.Length; i++)
             {
-                girthSeg[i] = sizeSeg[i] = rearSeg[i] = -1;
-                girthF[i] = sizeF[i] = rearF[i] = 1f;
+                girthSeg[i] = sizeSeg[i] = rearSeg[i] = widthSeg[i] = -1;
+                girthF[i] = sizeF[i] = rearF[i] = widthF[i] = 1f;
                 var b = bones[i];
                 if (b == null) continue;
                 var owner = rig.IsHumanoid(b) ? b : (b.name.StartsWith("J_Adj_", StringComparison.Ordinal) ? rig.HumanoidAncestor(b) : null);
@@ -255,7 +289,12 @@ namespace VRoidPlus
                     }
                     else if (owner != null && owner == seg.Bone)
                     {
-                        if (seg.Mode == Mode.Rear)
+                        if (seg.Mode == Mode.Width)
+                        {
+                            if (widthSeg[i] < 0) widthSeg[i] = s;
+                            widthF[i] *= seg.Factor;
+                        }
+                        else if (seg.Mode == Mode.Rear)
                         {
                             if (rearSeg[i] < 0) rearSeg[i] = s;
                             rearF[i] *= seg.Factor;
@@ -267,9 +306,9 @@ namespace VRoidPlus
                         }
                     }
                 }
-                if (!Mathf.Approximately(girthF[i], 1f) || !Mathf.Approximately(sizeF[i], 1f) || !Mathf.Approximately(rearF[i], 1f)) any = true;
+                if (!Mathf.Approximately(girthF[i], 1f) || !Mathf.Approximately(sizeF[i], 1f) || !Mathf.Approximately(rearF[i], 1f) || !Mathf.Approximately(widthF[i], 1f)) any = true;
             }
-            if (!any && !_states.ContainsKey(mesh.GetInstanceID())) return;
+            if (!any && !_states.ContainsKey(mesh.GetInstanceID())) { _unaffected.Add(mesh.GetInstanceID() + "|" + key); return; }
 
             int id = mesh.GetInstanceID();
             var current = Copy.Vertices(mesh);
@@ -288,11 +327,13 @@ namespace VRoidPlus
 
             // Per bone slot, in that bone's local space: the girth axis (start joint and direction), the size
             // pivot and the rear (butt) axis with the model's backward direction, plus their factors.
-            var d = new Slots(bones.Length) { GirthF = girthF, SizeF = sizeF, RearF = rearF, Bind = bind };
+            var d = new Slots(bones.Length) { GirthF = girthF, SizeF = sizeF, RearF = rearF, WidthF = widthF, Bind = bind };
             var back = rig.Back;
+            var right = rig.Right;
+            var hipsBone = rig.Bone(HumanBodyBones.Hips);
             for (int i = 0; i < bones.Length; i++)
             {
-                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f) && Mathf.Approximately(rearF[i], 1f)) continue;
+                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f) && Mathf.Approximately(rearF[i], 1f) && Mathf.Approximately(widthF[i], 1f)) continue;
                 d.Active[i] = true;
                 d.BindInv[i] = bind[i].inverse;
                 if (girthSeg[i] >= 0)
@@ -302,6 +343,26 @@ namespace VRoidPlus
                     d.GirthAxis[i] = bones[i].InverseTransformPoint(g.Toward.position) - d.GirthStart[i];
                 }
                 if (sizeSeg[i] >= 0) d.SizePivot[i] = bones[i].InverseTransformPoint(segs[sizeSeg[i]].Bone.position);
+                if (widthSeg[i] >= 0 && hipsBone != null)
+                {
+                    var wseg = segs[widthSeg[i]];
+                    d.WidthRight[i] = bones[i].InverseTransformDirection(right).normalized;
+                    if (wseg.Bone == hipsBone)
+                    {
+                        // Pelvis: spread sideways from the body's centre line.
+                        d.WidthCenter[i] = bones[i].InverseTransformPoint(hipsBone.position);
+                    }
+                    else
+                    {
+                        // Thigh: move the top of the thigh out with the hip joint, without scaling it, fading out
+                        // halfway to the knee, so the thigh keeps its size.
+                        var lateral = Vector3.Project(wseg.Bone.position - hipsBone.position, right);
+                        d.WidthShift[i] = bones[i].InverseTransformVector(lateral);
+                        d.WidthStart[i] = bones[i].InverseTransformPoint(wseg.Bone.position);
+                        d.WidthAxis[i] = bones[i].InverseTransformPoint(wseg.Toward.position) - d.WidthStart[i];
+                        d.WidthIsLeg[i] = true;
+                    }
+                }
                 if (rearSeg[i] >= 0)
                 {
                     var r = segs[rearSeg[i]];
@@ -339,6 +400,9 @@ namespace VRoidPlus
             public readonly bool[] Active;
             public readonly Vector3[] GirthStart, GirthAxis, SizePivot, RearStart, RearAxis, RearBack;
             public readonly float[] RearFade;
+            public readonly Vector3[] WidthRight, WidthCenter, WidthShift, WidthStart, WidthAxis;
+            public readonly bool[] WidthIsLeg;
+            public float[] WidthF;
             public readonly Matrix4x4[] BindInv;
             public float[] GirthF, SizeF, RearF;
             public Matrix4x4[] Bind;
@@ -349,6 +413,8 @@ namespace VRoidPlus
                 GirthStart = new Vector3[n]; GirthAxis = new Vector3[n]; SizePivot = new Vector3[n];
                 RearStart = new Vector3[n]; RearAxis = new Vector3[n]; RearBack = new Vector3[n];
                 RearFade = new float[n];
+                WidthRight = new Vector3[n]; WidthCenter = new Vector3[n]; WidthShift = new Vector3[n];
+                WidthStart = new Vector3[n]; WidthAxis = new Vector3[n]; WidthIsLeg = new bool[n];
                 BindInv = new Matrix4x4[n];
             }
         }
@@ -396,6 +462,26 @@ namespace VRoidPlus
                             localDelta += radial * ((d.RearF[bi] - 1f) * facing * facing * fade);
                         }
                     }
+                }
+            }
+
+            // Hip width: pelvis spreads sideways; thighs are carried out with it but not scaled.
+            if (!Mathf.Approximately(d.WidthF[bi], 1f))
+            {
+                if (d.WidthIsLeg[bi])
+                {
+                    var a = d.WidthAxis[bi];
+                    var len2 = a.sqrMagnitude;
+                    var t = len2 > 1e-8f ? Vector3.Dot(local - d.WidthStart[bi], a) / len2 : 0f;
+                    var fade = Mathf.Clamp01(1f - Mathf.Max(0f, t) / 0.5f);
+                    fade = fade * fade * (3f - 2f * fade);
+                    localDelta += d.WidthShift[bi] * ((d.WidthF[bi] - 1f) * fade);
+                }
+                else
+                {
+                    var r = d.WidthRight[bi];
+                    var lateral = Vector3.Dot(local - d.WidthCenter[bi], r);
+                    localDelta += r * (lateral * (d.WidthF[bi] - 1f));
                 }
             }
 

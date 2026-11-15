@@ -35,6 +35,17 @@ namespace VRoidPlus
             return _ctx;
         }
 
+        /// <summary>
+        /// A value that changes whenever VRoid edits or rebuilds the model (the editing context's revision
+        /// counters). Used to react immediately when VRoid replaces meshes or resets the pose.
+        /// </summary>
+        public static string EditRevision()
+        {
+            var ctx = Context(out _);
+            if (ctx == null) return "";
+            return $"{Get(ctx, "_revision")}/{Get(ctx, "_needsUpdateResolvedRevision")}/{Get(ctx, "_needsUpdateAvatarResolvedRevision")}/{Get(ctx, "_needsUpdatePrioritizedResolvedRevision")}/{Compat.Identity(ctx)}";
+        }
+
         /// <summary>Resolves a path below the AvatarEditor's view model, e.g. "CurrentFile.model.path".</summary>
         public static object FromViewModel(string rest, out string error) =>
             ReflectionPath.Resolve("$find:VRoidStudio.GUI.AvatarEditor.AvatarEditor::_viewModel." + rest, out error);

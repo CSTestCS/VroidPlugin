@@ -199,12 +199,43 @@ namespace VRoidPlus
             Safe.Run("ModelFile", ModelFile.Current.Update);
             Safe.Run("HairAnchors", HairAnchors.Update);
             Safe.Run("AccessoryAnchors", AccessoryAnchors.Update);
-            Safe.Run("Body", Body.Update);
             Safe.Run("Pose", Pose.Update);
         }
 
+        private static string _lastRevision = "";
+        private static float _fastUntil, _nextFastRefresh;
+        private static float _nextRevisionPoll;
+
+        /// <summary>True for a few seconds after VRoid edited/rebuilt the model.</summary>
+        public static bool RecentlyRebuilt => Time.unscaledTime < _fastUntil;
+
+        /// <summary>
+        /// LateUpdate runs after VRoid's own updates and before the frame is drawn, so re-applying here means
+        /// VRoid's rebuilds (which reset meshes and the pose) don't show for even a frame.
+        /// </summary>
         public static void LateUpdate()
         {
+            Safe.Run("Watch", () =>
+            {
+                if (Time.unscaledTime >= _nextRevisionPoll || RecentlyRebuilt)
+                {
+                    _nextRevisionPoll = Time.unscaledTime + 0.1f;
+                    var rev = VRoidApi.EditRevision();
+                    if (rev != _lastRevision)
+                    {
+                        _lastRevision = rev;
+                        _fastUntil = Time.unscaledTime + 4f;
+                    }
+                }
+                if (RecentlyRebuilt && Time.unscaledTime >= _nextFastRefresh)
+                {
+                    // VRoid may have replaced bones or whole model copies: look again (ten times a second).
+                    _nextFastRefresh = Time.unscaledTime + 0.1f;
+                    Avatar.Refresh(true);
+                    Avatar.InvalidateHumanoids();
+                }
+            });
+            Safe.Run("Body", () => Body.Tick(RecentlyRebuilt));
             Safe.Run("Pose.Late", Pose.LateUpdate);
         }
     }

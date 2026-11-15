@@ -107,6 +107,14 @@ namespace VRoidPlus.Fbx
         private Quaternion _facing = Quaternion.identity;
 
         private Animator _target;
+        private Transform _targetHips;
+
+        /// <summary>False once VRoid rebuilt the model (new skeleton) or the model is gone.</summary>
+        public bool IsAttachedTo(Animator a)
+        {
+            if (a == null || _target == null || _target != a || _targetHips == null) return false;
+            return a.GetBoneTransform(HumanBodyBones.Hips) == _targetHips;
+        }
         private readonly List<(HumanBodyBones bone, Transform t)> _ordered = new();
         private readonly Dictionary<Transform, Quaternion> _savedLocal = new();
         private Vector3 _savedHipsLocal;
@@ -164,6 +172,7 @@ namespace VRoidPlus.Fbx
             _ordered.Sort((x, y) => Depth(x.t).CompareTo(Depth(y.t)));
 
             var hips = target.GetBoneTransform(HumanBodyBones.Hips);
+            _targetHips = hips;
             _savedHipsLocal = hips.localPosition;
             _tgtHipsRestLocal = hips.localPosition;
 

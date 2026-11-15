@@ -132,6 +132,13 @@ namespace VRoidPlus
             if (!Loaded) return;
             if (Avatar.Animator == null) { Unload(); Status = "Avatar was unloaded."; return; }
             var main = Avatar.Animator;
+            if (!Retarget.IsAttachedTo(main))
+            {
+                // VRoid rebuilt the model (new skeleton): follow it straight away instead of losing the pose.
+                var rt = new Retargeter(Scene);
+                rt.Attach(main);
+                Retarget = rt;
+            }
             Retarget.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion);
 
             // Photo mode shows its own copies of the model: drive those too.
@@ -141,7 +148,7 @@ namespace VRoidPlus
                 if (a == null || a == main) continue;
                 var id = a.GetInstanceID();
                 alive.Add(id);
-                if (!_perModel.TryGetValue(id, out var rt))
+                if (!_perModel.TryGetValue(id, out var rt) || !rt.IsAttachedTo(a))
                 {
                     try { rt = new Retargeter(Scene); rt.Attach(a); _perModel[id] = rt; }
                     catch (Exception e) { Plugin.Logger.LogWarning("FBX on " + a.name + ": " + e.Message); continue; }

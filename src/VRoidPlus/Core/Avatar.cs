@@ -106,6 +106,9 @@ namespace VRoidPlus
         /// Every humanoid model in the scene. VRoid keeps several copies of the avatar (the editor model,
         /// and in photo mode PhotoBoothModel / PreviewModelOrigin / MeshReductionReference).
         /// </summary>
+        /// <summary>Makes the next AllHumanoids() call search the scene again.</summary>
+        public static void InvalidateHumanoids() => _nextAllSearch = 0;
+
         public static List<Animator> AllHumanoids()
         {
             if (Time.unscaledTime < _nextAllSearch && _allHumanoids.All(a => a != null)) return _allHumanoids;
