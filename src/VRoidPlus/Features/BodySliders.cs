@@ -125,14 +125,17 @@ namespace VRoidPlus
             public BoneWeight[] Weights;   // cached: read once per original mesh
             public Matrix4x4[] Bind;
             public readonly Queue<float> Overwrites = new();
-            /// <summary>A copy VRoid made of a mesh we had already reshaped (e.g. while exporting): never reshape it again.</summary>
-            public bool IsCopyOfOurs;
             public float BackoffUntil;
         }
 
         private readonly Dictionary<int, MeshState> _states = new();
-        /// <summary>Fingerprints of every vertex set we wrote, to recognise copies of our output.</summary>
-        private readonly HashSet<int> _writtenPrints = new();
+        /// <summary>
+        /// Fingerprint of every reshaped vertex set we wrote -> the un-reshaped original it was made from and
+        /// the slider values used. VRoid sometimes makes a new mesh that is a copy of one we reshaped (while
+        /// rebuilding, exporting or uploading); such a copy takes over that original instead of being reshaped
+        /// a second time, and still follows later slider changes.
+        /// </summary>
+        private readonly Dictionary<int, (Vector3[] original, string key)> _writtenPrints = new();
         public int CopiesSkipped;
 
         private static int Print(Vector3[] v)
@@ -252,7 +255,7 @@ namespace VRoidPlus
             }
             if (!outOfTime) _passActive = false;   // pass finished this frame
             if (!outOfTime && !_passActive)
-                LastInfo = $"{now:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, frame budget hit {BudgetHits}x, backed off {Backoffs}x, copies of reshaped meshes left alone {CopiesSkipped}x, key {key}, file {File.Path ?? "(unsaved)"}";
+                LastInfo = $"{now:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, frame budget hit {BudgetHits}x, backed off {Backoffs}x, copies of reshaped meshes recognised {CopiesSkipped}x, key {key}, file {File.Path ?? "(unsaved)"}";
         }
 
         /// <summary>One model's skeleton: its humanoid bones and helpers to classify other bones.</summary>
@@ -407,11 +410,11 @@ namespace VRoidPlus
                 // New mesh, or VRoid regenerated it: what's there now is the new original - unless it is an
                 // exact copy of something we wrote (VRoid duplicating an already reshaped mesh).
                 var fresh = new MeshState { Mesh = mesh, Original = current, Key = "" };
-                if (_writtenPrints.Contains(Print(current)))
+                if (_writtenPrints.TryGetValue(Print(current), out var source) && source.original.Length == current.Length)
                 {
-                    fresh.IsCopyOfOurs = true;
+                    fresh.Original = source.original;
                     fresh.Written = current;
-                    fresh.Key = key;
+                    fresh.Key = source.key;
                     CopiesSkipped++;
                 }
                 if (overwrites != null)
@@ -422,7 +425,7 @@ namespace VRoidPlus
                 st = fresh;
                 _states[id] = st;
             }
-            if (st.IsCopyOfOurs || st.Key == key) return;
+            if (st.Key == key) return;
 
             st.Weights ??= Copy.BoneWeights(mesh);
             st.Bind ??= Copy.BindPoses(mesh);
@@ -495,8 +498,13 @@ namespace VRoidPlus
             mesh.vertices = result;
             mesh.RecalculateBounds();
             st.Written = Copy.Vertices(mesh);
-            if (_writtenPrints.Count > 50000) _writtenPrints.Clear();
-            _writtenPrints.Add(Print(st.Written));
+            // Only remember results that differ from the original: an unchanged mesh (e.g. every slider back at
+            // 100%) would otherwise make every fresh rebuild of it look like a copy of ours.
+            if (!Identical(st.Written, st.Original))
+            {
+                if (_writtenPrints.Count > 20000) _writtenPrints.Clear();
+                _writtenPrints[Print(st.Written)] = (st.Original, key);
+            }
             st.Key = key;
             Applied++;
         }
@@ -597,6 +605,13 @@ namespace VRoidPlus
                 localDelta += (local + localDelta - d.SizePivot[bi]) * (d.SizeF[bi] - 1f);
 
             return d.BindInv[bi].MultiplyVector(localDelta) * w;
+        }
+
+        private static bool Identical(Vector3[] a, Vector3[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
         }
 
         private static bool SameAs(Vector3[] a, Vector3[] b)
