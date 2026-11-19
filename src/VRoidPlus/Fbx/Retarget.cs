@@ -188,7 +188,8 @@ namespace VRoidPlus.Fbx
             _facing = srcRight.sqrMagnitude > 1e-8f && tgtRight.sqrMagnitude > 1e-8f ? Quaternion.FromToRotation(srcRight.normalized, tgtRight.normalized) : Quaternion.identity;
         }
 
-        public void Apply(FbxTake take, double time, bool rootMotion)
+        /// <param name="freeHead">Don't touch the head bone: it keeps the rotation VRoid/photo mode gives it, on top of the animated neck.</param>
+        public void Apply(FbxTake take, double time, bool rootMotion, bool freeHead = false)
         {
             if (_target == null) return;
             var g = _scene.Evaluate(take, time);
@@ -198,6 +199,7 @@ namespace VRoidPlus.Fbx
             foreach (var (bone, t) in _ordered)
             {
                 if (bone == HumanBodyBones.LeftEye || bone == HumanBodyBones.RightEye || bone == HumanBodyBones.Jaw) continue;
+                if (freeHead && bone == HumanBodyBones.Head) continue;
                 if (!_source.TryGetValue(bone, out var src)) { t.localRotation = Quaternion.identity; continue; }
                 var delta = FbxScene.Rotation(g[src]) * Quaternion.Inverse(_srcRestRot[bone]);
                 t.rotation = _facing * delta * Quaternion.Inverse(_facing) * tgtRest;

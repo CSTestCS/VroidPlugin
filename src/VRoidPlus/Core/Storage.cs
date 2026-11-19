@@ -80,6 +80,8 @@ namespace VRoidPlus
         public bool ShowDiagnosticsBanner = true;
         public bool FbxLoop = true;
         public bool FbxApplyRootMotion = false;
+        /// <summary>Leave the head to photo mode (e.g. looking at the camera) while the body plays the FBX.</summary>
+        public bool FbxFreeHead = false;
         public float WindowX = 20, WindowY = 60, WindowW = 460, WindowH = 620;
     }
 

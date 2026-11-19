@@ -392,6 +392,8 @@ namespace VRoidPlus
                 var rm = Ui.Toggle(s.FbxApplyRootMotion, "Allow the model to move around (root motion)");
                 if (loop != s.FbxLoop || rm != s.FbxApplyRootMotion) { s.FbxLoop = loop; s.FbxApplyRootMotion = rm; Settings.Save(); }
             }
+            var freeHead = Ui.Toggle(s.FbxFreeHead, "Let photo mode control the head (the rest of the body keeps the animation/pose)");
+            if (freeHead != s.FbxFreeHead) { s.FbxFreeHead = freeHead; Settings.Save(); }
             if (Ui.Button("Unload (back to VRoid poses)", 220)) p.Unload();
         }
 

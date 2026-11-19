@@ -141,7 +141,7 @@ namespace VRoidPlus
                 rt.Attach(main);
                 Retarget = rt;
             }
-            Retarget.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion);
+            Retarget.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion, Settings.Current.FbxFreeHead);
 
             // Photo mode shows its own copies of the model: drive those too.
             var alive = new HashSet<int>();
@@ -155,7 +155,7 @@ namespace VRoidPlus
                     try { rt = new Retargeter(Scene); rt.Attach(a); _perModel[id] = rt; }
                     catch (Exception e) { Plugin.Logger.LogWarning("FBX on " + a.name + ": " + e.Message); continue; }
                 }
-                rt.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion);
+                rt.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion, Settings.Current.FbxFreeHead);
             }
             foreach (var gone in _perModel.Keys.Where(k => !alive.Contains(k)).ToList()) _perModel.Remove(gone);
         }

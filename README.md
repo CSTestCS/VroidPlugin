@@ -76,6 +76,7 @@ Slider values and anchor choices belong to the open `.vroid` file. They're kept 
 ### Pose
 - **Show Controller** is switched off each time the pose editor opens. You can turn it on again as usual. You can disable this behaviour in the Pose tab.
 - **Load .fbx file…** loads a pose or animation from a binary FBX (Mixamo, Blender, Maya, etc.). Animations play like VRoid's built-in ones: you get Play/Pause (and a choice of animation if the file has several), and the pose isn't editable while it's loaded. Press **Unload** to go back to normal posing.
+  Tick **Let photo mode control the head** to keep the body on the animation while the head follows photo mode (for example looking at the camera).
   Bones are matched by name: Mixamo, VRoid/VRM, Unity-style, 3ds Max Biped and most common rigs work. Text (ASCII) FBX files aren't supported; re-export them as binary.
 
 ---
