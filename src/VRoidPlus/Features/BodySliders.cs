@@ -125,10 +125,35 @@ namespace VRoidPlus
             public BoneWeight[] Weights;   // cached: read once per original mesh
             public Matrix4x4[] Bind;
             public readonly Queue<float> Overwrites = new();
+            /// <summary>A copy VRoid made of a mesh we had already reshaped (e.g. while exporting): never reshape it again.</summary>
+            public bool IsCopyOfOurs;
             public float BackoffUntil;
         }
 
         private readonly Dictionary<int, MeshState> _states = new();
+        /// <summary>Fingerprints of every vertex set we wrote, to recognise copies of our output.</summary>
+        private readonly HashSet<int> _writtenPrints = new();
+        public int CopiesSkipped;
+
+        private static int Print(Vector3[] v)
+        {
+            var h = new HashCode();
+            h.Add(v.Length);
+            int step = Math.Max(1, v.Length / 97);
+            for (int i = 0; i < v.Length; i += step) { h.Add(v[i].x); h.Add(v[i].y); h.Add(v[i].z); }
+            return h.ToHashCode();
+        }
+
+        /// <summary>
+        /// The model copies VRoid shows you: the editor model and photo mode's model. Everything else VRoid
+        /// builds (export/upload preview, mesh reduction) is made from the editor's meshes, which already carry
+        /// the slider changes, so reshaping those again would double the effect in exports.
+        /// </summary>
+        private static bool IsShownModel(Animator a)
+        {
+            var n = a.gameObject.name;
+            return n.StartsWith("CurrentModelOrigin", StringComparison.Ordinal) || n == "PhotoBoothModel";
+        }
         private float _nextCheck;
         private bool _dirty = true;
 
@@ -188,9 +213,13 @@ namespace VRoidPlus
             int seen = 0, unreadable = 0, noMesh = 0, models = 0;
             var key = Key();
             if (key != _lastKey) { _unaffected.Clear(); _lastKey = key; }
-            foreach (var animator in Avatar.AllHumanoids())
+            var humanoids = Avatar.AllHumanoids();
+            bool anyKnown = humanoids.Any(a => a != null && IsShownModel(a));
+            foreach (var animator in humanoids)
             {
                 if (animator == null) continue;
+                // Other VRoid versions may name models differently: then fall back to the chosen avatar only.
+                if (anyKnown ? !IsShownModel(animator) : animator != Avatar.Animator) continue;
                 models++;
                 Rig rig = null;
                 foreach (var smr in animator.GetComponentsInChildren<SkinnedMeshRenderer>(false))
@@ -223,7 +252,7 @@ namespace VRoidPlus
             }
             if (!outOfTime) _passActive = false;   // pass finished this frame
             if (!outOfTime && !_passActive)
-                LastInfo = $"{now:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, frame budget hit {BudgetHits}x, backed off {Backoffs}x, key {key}, file {File.Path ?? "(unsaved)"}";
+                LastInfo = $"{now:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, frame budget hit {BudgetHits}x, backed off {Backoffs}x, copies of reshaped meshes left alone {CopiesSkipped}x, key {key}, file {File.Path ?? "(unsaved)"}";
         }
 
         /// <summary>One model's skeleton: its humanoid bones and helpers to classify other bones.</summary>
@@ -375,8 +404,16 @@ namespace VRoidPlus
                     overwrites.Enqueue(now);
                     while (overwrites.Count > 0 && now - overwrites.Peek() > 3f) overwrites.Dequeue();
                 }
-                // New mesh, or VRoid regenerated it: what's there now is the new original.
+                // New mesh, or VRoid regenerated it: what's there now is the new original - unless it is an
+                // exact copy of something we wrote (VRoid duplicating an already reshaped mesh).
                 var fresh = new MeshState { Mesh = mesh, Original = current, Key = "" };
+                if (_writtenPrints.Contains(Print(current)))
+                {
+                    fresh.IsCopyOfOurs = true;
+                    fresh.Written = current;
+                    fresh.Key = key;
+                    CopiesSkipped++;
+                }
                 if (overwrites != null)
                 {
                     foreach (var t in overwrites) fresh.Overwrites.Enqueue(t);
@@ -385,7 +422,7 @@ namespace VRoidPlus
                 st = fresh;
                 _states[id] = st;
             }
-            if (st.Key == key) return;
+            if (st.IsCopyOfOurs || st.Key == key) return;
 
             st.Weights ??= Copy.BoneWeights(mesh);
             st.Bind ??= Copy.BindPoses(mesh);
@@ -458,6 +495,8 @@ namespace VRoidPlus
             mesh.vertices = result;
             mesh.RecalculateBounds();
             st.Written = Copy.Vertices(mesh);
+            if (_writtenPrints.Count > 50000) _writtenPrints.Clear();
+            _writtenPrints.Add(Print(st.Written));
             st.Key = key;
             Applied++;
         }
