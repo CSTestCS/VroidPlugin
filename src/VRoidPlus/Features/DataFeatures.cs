@@ -204,7 +204,7 @@ namespace VRoidPlus
 
         private static string _lastRevision = "";
         private static float _fastUntil, _nextFastRefresh;
-        private static float _nextRevisionPoll;
+        private static float _nextRevisionPoll, _fastBlockedUntil;
 
         /// <summary>True for a few seconds after VRoid edited/rebuilt the model.</summary>
         public static bool RecentlyRebuilt => Time.unscaledTime < _fastUntil;
@@ -224,13 +224,19 @@ namespace VRoidPlus
                     if (rev != _lastRevision)
                     {
                         _lastRevision = rev;
-                        _fastUntil = Time.unscaledTime + 4f;
+                        // At most 4 s of quick re-checking per 8 s: some screens (photo mode) change VRoid's
+                        // counters all the time, and re-checking constantly would lag.
+                        if (Time.unscaledTime >= _fastBlockedUntil)
+                        {
+                            _fastUntil = Time.unscaledTime + 4f;
+                            _fastBlockedUntil = Time.unscaledTime + 8f;
+                        }
                     }
                 }
                 if (RecentlyRebuilt && Time.unscaledTime >= _nextFastRefresh)
                 {
-                    // VRoid may have replaced bones or whole model copies: look again (ten times a second).
-                    _nextFastRefresh = Time.unscaledTime + 0.1f;
+                    // VRoid may have replaced bones or whole model copies: look again (twice a second).
+                    _nextFastRefresh = Time.unscaledTime + 0.5f;
                     Avatar.Refresh(true);
                     Avatar.InvalidateHumanoids();
                 }

@@ -102,6 +102,7 @@ namespace VRoidPlus
 
         /// <summary>One retargeter per model copy (editor model, photo mode models), keyed by instance id.</summary>
         private readonly Dictionary<int, Retargeter> _perModel = new();
+        private float _nextReattach;
 
         public void Unload(bool clearStatus = true)
         {
@@ -132,8 +133,9 @@ namespace VRoidPlus
             if (!Loaded) return;
             if (Avatar.Animator == null) { Unload(); Status = "Avatar was unloaded."; return; }
             var main = Avatar.Animator;
-            if (!Retarget.IsAttachedTo(main))
+            if (!Retarget.IsAttachedTo(main) && Time.unscaledTime >= _nextReattach)
             {
+                _nextReattach = Time.unscaledTime + 0.5f;
                 // VRoid rebuilt the model (new skeleton): follow it straight away instead of losing the pose.
                 var rt = new Retargeter(Scene);
                 rt.Attach(main);

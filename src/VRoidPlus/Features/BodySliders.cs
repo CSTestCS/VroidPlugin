@@ -122,6 +122,10 @@ namespace VRoidPlus
             public Vector3[] Original;
             public Vector3[] Written;
             public string Key; // the slider values Written was made with
+            public BoneWeight[] Weights;   // cached: read once per original mesh
+            public Matrix4x4[] Bind;
+            public readonly Queue<float> Overwrites = new();
+            public float BackoffUntil;
         }
 
         private readonly Dictionary<int, MeshState> _states = new();
@@ -150,13 +154,37 @@ namespace VRoidPlus
         ///  - fast (shortly after VRoid edited the model) or every 1.5 s: every mesh is checked, which also
         ///    catches meshes VRoid rewrote in place.
         /// </summary>
+        /// <summary>Most time body sliders may use per frame; the rest of a pass continues next frame.</summary>
+        private const double FrameBudgetMs = 4.0;
+        private readonly HashSet<int> _passDone = new();
+        private bool _passActive;
+        private float _nextFastPass, _nextSwapScan;
+        /// <summary>smr instance id -> when it was last reshaped because VRoid swapped its mesh</summary>
+        private readonly Dictionary<int, float> _lastSwapFix = new();
+        private readonly System.Diagnostics.Stopwatch _clock = new();
+        public int BudgetHits, Backoffs;
+
         public void Tick(bool fast)
         {
-            bool periodic = _dirty || Time.unscaledTime >= _nextCheck;
-            if (periodic) { _nextCheck = Time.unscaledTime + 1.5f; _dirty = false; }
+            var now = Time.unscaledTime;
+            // A full pass checks every mesh (also catches meshes VRoid rewrote in place): on slider change,
+            // every 1.5 s, and 4x a second shortly after VRoid edited the model. It may span several frames.
+            if (_dirty || now >= _nextCheck || (fast && now >= _nextFastPass))
+            {
+                _nextCheck = now + 1.5f;
+                _nextFastPass = now + 0.25f;
+                _dirty = false;
+                _passActive = true;
+                _passDone.Clear();
+            }
             if (!Avatar.Found) return;
-            if (AllDefault && _states.Count == 0) return;
+            if (AllDefault && _states.Count == 0) { _passActive = false; return; }
+            // Between passes, looking for swapped meshes 10x a second is enough (it walks every mesh).
+            if (!_passActive && now < _nextSwapScan) return;
+            _nextSwapScan = now + 0.1f;
 
+            _clock.Restart();
+            bool outOfTime = false;
             int seen = 0, unreadable = 0, noMesh = 0, models = 0;
             var key = Key();
             if (key != _lastKey) { _unaffected.Clear(); _lastKey = key; }
@@ -175,15 +203,27 @@ namespace VRoidPlus
                     var meshId = mesh.GetInstanceID();
                     bool swapped = !_meshOf.TryGetValue(smrId, out var last) || last != meshId;
                     _meshOf[smrId] = meshId;
-                    if (!(periodic || fast || swapped)) continue;
+
+                    bool inPass = _passActive && !_passDone.Contains(smrId);
+                    // A swapped mesh is fixed at once, but at most twice a second per mesh (photo mode can
+                    // replace meshes continuously; reshaping them every frame would lag).
+                    bool fixSwap = swapped && (!_lastSwapFix.TryGetValue(smrId, out var lastFix) || now - lastFix >= 0.5f);
+                    if (!inPass && !fixSwap) continue;
+                    if (outOfTime) continue;
+                    if (_passActive) _passDone.Add(smrId);
+                    if (fixSwap) _lastSwapFix[smrId] = now;
+
                     if (_unaffected.Contains(meshId + "|" + key)) continue;
                     if (!mesh.isReadable) { unreadable++; continue; }
                     rig ??= new Rig(animator);
                     Process(smr, mesh, key, rig);
+
+                    if (_clock.Elapsed.TotalMilliseconds > FrameBudgetMs) { outOfTime = true; BudgetHits++; }
                 }
             }
-            if (periodic)
-                LastInfo = $"{Time.unscaledTime:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, key {key}, file {File.Path ?? "(unsaved)"}";
+            if (!outOfTime) _passActive = false;   // pass finished this frame
+            if (!outOfTime && !_passActive)
+                LastInfo = $"{now:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, frame budget hit {BudgetHits}x, backed off {Backoffs}x, key {key}, file {File.Path ?? "(unsaved)"}";
         }
 
         /// <summary>One model's skeleton: its humanoid bones and helpers to classify other bones.</summary>
@@ -244,6 +284,18 @@ namespace VRoidPlus
         {
             var bones = smr.bones;
             if (bones == null || bones.Length == 0) return;
+
+            // Already reshaped with these values? Then only check whether VRoid overwrote it.
+            int meshKey = mesh.GetInstanceID();
+            if (_states.TryGetValue(meshKey, out var known) && known.Mesh == mesh)
+            {
+                if (Time.unscaledTime < known.BackoffUntil) return;
+                if (known.Key == key)
+                {
+                    var now0 = Copy.Vertices(mesh);
+                    if (SameAs(now0, known.Written)) return;
+                }
+            }
 
             // Resolve every active slider's segments on this model.
             var segs = new List<Seg>();
@@ -314,15 +366,31 @@ namespace VRoidPlus
             var current = Copy.Vertices(mesh);
             if (!_states.TryGetValue(id, out var st) || st.Mesh != mesh || st.Original.Length != current.Length || !SameAs(current, st.Written))
             {
-                if (st != null && st.Written != null) Overwritten++; // VRoid replaced what we wrote
+                var overwrites = st?.Overwrites;
+                if (st != null && st.Written != null)
+                {
+                    Overwritten++; // VRoid replaced what we wrote
+                    // If VRoid keeps rewriting this mesh (e.g. in photo mode), don't fight it every frame.
+                    var now = Time.unscaledTime;
+                    overwrites.Enqueue(now);
+                    while (overwrites.Count > 0 && now - overwrites.Peek() > 3f) overwrites.Dequeue();
+                }
                 // New mesh, or VRoid regenerated it: what's there now is the new original.
-                st = new MeshState { Mesh = mesh, Original = current, Key = "" };
+                var fresh = new MeshState { Mesh = mesh, Original = current, Key = "" };
+                if (overwrites != null)
+                {
+                    foreach (var t in overwrites) fresh.Overwrites.Enqueue(t);
+                    if (fresh.Overwrites.Count >= 3) { fresh.BackoffUntil = Time.unscaledTime + 0.5f; Backoffs++; }
+                }
+                st = fresh;
                 _states[id] = st;
             }
             if (st.Key == key) return;
 
-            var weights = Copy.BoneWeights(mesh);
-            var bind = Copy.BindPoses(mesh);
+            st.Weights ??= Copy.BoneWeights(mesh);
+            st.Bind ??= Copy.BindPoses(mesh);
+            var weights = st.Weights;
+            var bind = st.Bind;
             if (weights.Length != st.Original.Length || bind.Length != bones.Length) return;
 
             // Per bone slot, in that bone's local space: the girth axis (start joint and direction), the size
