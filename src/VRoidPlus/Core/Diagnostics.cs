@@ -122,6 +122,7 @@ namespace VRoidPlus
             sb.AppendLine();
             sb.AppendLine("== Body sliders");
             sb.AppendLine("  " + Features.Body.LastInfo);
+            sb.AppendLine("  models: " + Features.Body.ModelsInfo);
             sb.AppendLine($"  values: {string.Join(", ", BodySliders.Sliders.Select(d => $"{d.Id} {Features.Body.Get(d.Id)}"))}; file {Features.Body.File.Path ?? "(unsaved)"}, unsaved changes {Features.Body.File.HasUnsavedChanges}");
             foreach (var (title, anchors) in new[] { ("Hair", Features.HairAnchors), ("Accessory", Features.AccessoryAnchors) })
             {

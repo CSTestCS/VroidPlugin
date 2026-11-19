@@ -138,11 +138,38 @@ namespace VRoidPlus
         private readonly Dictionary<int, (Vector3[] original, string key)> _writtenPrints = new();
         public int CopiesSkipped;
 
-        /// <summary>Copies VRoid makes from another copy (VRM export/import, mesh reduction); they inherit the shape.</summary>
-        private static bool IsDerivedModel(Animator a)
+        private readonly Dictionary<int, bool> _derivedCache = new();
+        public string ModelsInfo = "";
+
+        /// <summary>
+        /// Copies VRoid makes from another copy - photo mode (PhotoBoothModel), mesh reduction
+        /// (MeshReductionReference), the VRoid Hub upload, ... - inherit the slider shape and must not be
+        /// reshaped again. Only VRoid's fresh builds are reshaped: the editor model and PreviewModelOrigin.
+        /// Models with other names are judged by their meshes: a VRM export/import round trip gives every
+        /// mesh the whole skeleton (VRoid's own builds use under 100 bones per mesh), and a reduced copy's
+        /// meshes are named "(Clone)".
+        /// </summary>
+        private bool IsDerivedModel(Animator a)
         {
             var n = a.gameObject.name;
-            return n == "PhotoBoothModel" || n == "MeshReductionReference";
+            if (n.StartsWith("CurrentModelOrigin", StringComparison.Ordinal) || n == "PreviewModelOrigin") return false;
+            if (n == "PhotoBoothModel" || n == "MeshReductionReference") return true;
+            var id = a.GetInstanceID();
+            if (_derivedCache.TryGetValue(id, out var known)) return known;
+            bool derived = false;
+            int meshes = 0;
+            foreach (var smr in a.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (smr == null) continue;
+                meshes++;
+                var bones = smr.bones;
+                var mesh = smr.sharedMesh;
+                if ((bones != null && bones.Length >= 150) || (mesh != null && mesh.name.Contains("(Clone)"))) { derived = true; break; }
+            }
+            if (meshes == 0) return false;            // not built yet: decide once it has meshes
+            _derivedCache[id] = derived;
+            Plugin.Logger.LogInfo($"Body sliders: model '{n}' {(derived ? "is a copy (left as is)" : "is a fresh build (reshaped)")}");
+            return derived;
         }
 
         private static int Print(Vector3[] v)
@@ -218,9 +245,13 @@ namespace VRoidPlus
             // PhotoBoothModel by exporting PreviewModelOrigin to VRM and importing it again, MeshReductionReference
             // as a simplified clone of that. They inherit the slider shape, so reshaping them too would apply it
             // two or three times.
+            var modelNotes = new List<string>();
             foreach (var animator in Avatar.AllHumanoids())
             {
-                if (animator == null || IsDerivedModel(animator)) continue;
+                if (animator == null) continue;
+                bool derivedModel = IsDerivedModel(animator);
+                modelNotes.Add(animator.gameObject.name + (derivedModel ? " (copy, untouched)" : " (reshaped)"));
+                if (derivedModel) continue;
                 // Reshape a fresh preview model's meshes at once (ignoring the per-frame time limit), so the
                 // shape is in place before VRoid exports it and builds the photo mode / upload copies from it.
                 bool urgent = animator.gameObject.name == "PreviewModelOrigin";
@@ -254,6 +285,7 @@ namespace VRoidPlus
                     if (_clock.Elapsed.TotalMilliseconds > FrameBudgetMs) { outOfTime = true; BudgetHits++; }
                 }
             }
+            ModelsInfo = string.Join(", ", modelNotes);
             if (!outOfTime) _passActive = false;   // pass finished this frame
             if (!outOfTime && !_passActive)
                 LastInfo = $"{now:F0}s: {models} models, {seen} skinned meshes, {unreadable} not readable, {noMesh} without mesh, {_states.Count} tracked, applied {Applied}x, overwritten by VRoid {Overwritten}x, frame budget hit {BudgetHits}x, backed off {Backoffs}x, copies of reshaped meshes recognised {CopiesSkipped}x, key {key}, file {File.Path ?? "(unsaved)"}";
