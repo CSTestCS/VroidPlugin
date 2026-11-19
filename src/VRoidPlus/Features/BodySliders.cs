@@ -138,6 +138,13 @@ namespace VRoidPlus
         private readonly Dictionary<int, (Vector3[] original, string key)> _writtenPrints = new();
         public int CopiesSkipped;
 
+        /// <summary>Copies VRoid makes from another copy (VRM export/import, mesh reduction); they inherit the shape.</summary>
+        private static bool IsDerivedModel(Animator a)
+        {
+            var n = a.gameObject.name;
+            return n == "PhotoBoothModel" || n == "MeshReductionReference";
+        }
+
         private static int Print(Vector3[] v)
         {
             var h = new HashCode();
@@ -206,13 +213,17 @@ namespace VRoidPlus
             int seen = 0, unreadable = 0, noMesh = 0, models = 0;
             var key = Key();
             if (key != _lastKey) { _unaffected.Clear(); _lastKey = key; }
-            // Every copy of the character VRoid builds: the editor model, photo mode's models and the models it
-            // exports/uploads from. VRoid makes some of these by copying another copy's meshes; a copy made
-            // after we reshaped its source already has the slider changes and is recognised by fingerprint
-            // (see _writtenPrints), so each copy ends up reshaped exactly once.
+            // Only the copies VRoid builds fresh from its own data are reshaped: the editor model and
+            // PreviewModelOrigin (used for photo mode, export and upload). VRoid makes the other copies from those:
+            // PhotoBoothModel by exporting PreviewModelOrigin to VRM and importing it again, MeshReductionReference
+            // as a simplified clone of that. They inherit the slider shape, so reshaping them too would apply it
+            // two or three times.
             foreach (var animator in Avatar.AllHumanoids())
             {
-                if (animator == null) continue;
+                if (animator == null || IsDerivedModel(animator)) continue;
+                // Reshape a fresh preview model's meshes at once (ignoring the per-frame time limit), so the
+                // shape is in place before VRoid exports it and builds the photo mode / upload copies from it.
+                bool urgent = animator.gameObject.name == "PreviewModelOrigin";
                 models++;
                 Rig rig = null;
                 foreach (var smr in animator.GetComponentsInChildren<SkinnedMeshRenderer>(false))
@@ -231,7 +242,7 @@ namespace VRoidPlus
                     // replace meshes continuously; reshaping them every frame would lag).
                     bool fixSwap = swapped && (!_lastSwapFix.TryGetValue(smrId, out var lastFix) || now - lastFix >= 0.5f);
                     if (!inPass && !fixSwap) continue;
-                    if (outOfTime) continue;
+                    if (outOfTime && !(urgent && swapped)) continue;
                     if (_passActive) _passDone.Add(smrId);
                     if (fixSwap) _lastSwapFix[smrId] = now;
 
