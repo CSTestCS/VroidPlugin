@@ -139,42 +139,32 @@ namespace VRoidPlus
         private readonly Dictionary<int, (Vector3[] original, string key)> _writtenPrints = new();
         public int CopiesSkipped;
 
-        private readonly Dictionary<int, bool> _derivedCache = new();
         public string ModelsInfo = "";
 
+        private enum ModelKind { Source, Compare, Skip }
+
         /// <summary>
-        /// Copies VRoid makes from another copy - photo mode (PhotoBoothModel), mesh reduction
-        /// (MeshReductionReference), the VRoid Hub upload, ... - inherit the slider shape and must not be
-        /// reshaped again. Only VRoid's fresh builds are reshaped: the editor model and PreviewModelOrigin.
-        /// Models with other names are judged by their meshes: a VRM export/import round trip gives every
-        /// mesh the whole skeleton (VRoid's own builds use under 100 bones per mesh), and a reduced copy's
-        /// meshes are named "(Clone)".
+        /// Source: VRoid's own fresh builds from your character's data (editor model, PreviewModelOrigin) -
+        ///         always reshaped.
+        /// Skip:   MeshReductionReference, a simplified clone of another copy - inherits the shape.
+        /// Compare: everything else (photo mode's PhotoBoothModel, the ExportAvatar models that export and
+        ///         upload build, ...). The same name can be a fresh build (export) or a copy of an already
+        ///         reshaped model (upload), so each mesh is compared with the source's mesh of the same part.
         /// </summary>
-        private bool IsDerivedModel(Animator a)
+        private static ModelKind KindOf(Animator a)
         {
             var n = a.gameObject.name;
-            if (n.StartsWith("CurrentModelOrigin", StringComparison.Ordinal) || n == "PreviewModelOrigin") return false;
-            // Photo mode's model is built when photo mode opens, usually from the not-yet-reshaped preview, so
-            // it is reshaped too; meshes that did inherit the shape are recognised per mesh (TryInherit).
-            if (n == "PhotoBoothModel") return false;
-            if (n == "MeshReductionReference") return true;
-            var id = a.GetInstanceID();
-            if (_derivedCache.TryGetValue(id, out var known)) return known;
-            bool derived = false;
-            int meshes = 0;
-            foreach (var smr in a.GetComponentsInChildren<SkinnedMeshRenderer>(true))
-            {
-                if (smr == null) continue;
-                meshes++;
-                var bones = smr.bones;
-                var mesh = smr.sharedMesh;
-                if ((bones != null && bones.Length >= 150) || (mesh != null && mesh.name.Contains("(Clone)"))) { derived = true; break; }
-            }
-            if (meshes == 0) return false;            // not built yet: decide once it has meshes
-            _derivedCache[id] = derived;
-            Plugin.Logger.LogInfo($"Body sliders: model '{n}' {(derived ? "is a copy (left as is)" : "is a fresh build (reshaped)")}");
-            return derived;
+            if (n.StartsWith("CurrentModelOrigin", StringComparison.Ordinal) || n == "PreviewModelOrigin") return ModelKind.Source;
+            if (n == "MeshReductionReference") return ModelKind.Skip;
+            return ModelKind.Compare;
         }
+
+        private static bool IsSourceName(string model) =>
+            model != null && (model.StartsWith("CurrentModelOrigin", StringComparison.Ordinal) || model == "PreviewModelOrigin");
+
+        /// <summary>Per mesh of a Compare model: 'F' reshape it, 'L' leave it (decided the first time it's seen).</summary>
+        private readonly Dictionary<int, char> _decision = new();
+        private readonly Dictionary<string, int[]> _decisionCounts = new();   // model -> [inherited, reshaped, left, clearly inherited, clearly fresh]
 
         private static int Print(Vector3[] v)
         {
@@ -253,12 +243,14 @@ namespace VRoidPlus
             foreach (var animator in Avatar.AllHumanoids())
             {
                 if (animator == null) continue;
-                bool derivedModel = IsDerivedModel(animator);
-                modelNotes.Add(animator.gameObject.name + (derivedModel ? " (copy, untouched)" : " (reshaped)"));
-                if (derivedModel) continue;
-                // Reshape a fresh preview model's meshes at once (ignoring the per-frame time limit), so the
-                // shape is in place before VRoid exports it and builds the photo mode / upload copies from it.
-                bool urgent = animator.gameObject.name == "PreviewModelOrigin";
+                var kind = KindOf(animator);
+                var modelLabel = animator.gameObject.name;
+                if (_decisionCounts.TryGetValue(modelLabel, out var c)) modelNotes.Add($"{modelLabel} ({kind}: {c[0]} inherited, {c[1]} reshaped, {c[2]} left)");
+                else modelNotes.Add($"{modelLabel} ({kind})");
+                if (kind == ModelKind.Skip) continue;
+                // New meshes of any model are handled at once (ignoring the per-frame time limit), so the shape is
+                // in place before VRoid exports/uploads it or builds further copies from it.
+                bool urgent = true;
                 models++;
                 Rig rig = null;
                 foreach (var smr in animator.GetComponentsInChildren<SkinnedMeshRenderer>(false))
@@ -285,7 +277,7 @@ namespace VRoidPlus
                     if (!mesh.isReadable) { unreadable++; continue; }
                     rig ??= new Rig(animator);
                     var modelName = animator.gameObject.name;
-                    if (modelName == "PhotoBoothModel" && TryInherit(smr, mesh, key)) continue;
+                    if (kind == ModelKind.Compare && Decide(smr, mesh, modelName) == 'L') continue;
                     Process(smr, mesh, key, rig);
                     if (_states.TryGetValue(mesh.GetInstanceID(), out var done) && done.Model == null) { done.Model = modelName; done.Part = smr.gameObject.name; }
 
@@ -353,32 +345,57 @@ namespace VRoidPlus
         private struct Seg { public Transform Bone, Toward; public Mode Mode; public float Factor; }
 
         /// <summary>
-        /// For a photo mode mesh seen for the first time: compare it with the preview model's mesh of the same
-        /// part before (original) and after (reshaped). If it is clearly the reshaped one, it inherited the
-        /// slider shape: remember the preview's original for it (so it follows later slider changes) instead of
-        /// reshaping it again. Returns true when handled that way.
+        /// For a mesh of a non-source model seen for the first time: compare it with the source model's mesh of
+        /// the same part before (original) and after (reshaped) the sliders.
+        ///  - clearly the reshaped one: it was copied from an already reshaped model and inherited the shape.
+        ///    It takes over the source's original (so it follows later slider changes) instead of being
+        ///    reshaped again.
+        ///  - clearly the original: a fresh build; reshape it.
+        ///  - neither (no matching part, different layout): photo mode's model is reshaped (it is built from
+        ///    the not-yet-reshaped preview); anything else is left as it is.
         /// </summary>
-        private bool TryInherit(SkinnedMeshRenderer smr, Mesh mesh, string key)
+        private char Decide(SkinnedMeshRenderer smr, Mesh mesh, string modelName)
         {
             int id = mesh.GetInstanceID();
-            if (_states.TryGetValue(id, out var known) && known.Mesh == mesh) return false;   // already decided
+            if (_decision.TryGetValue(id, out var d)) return d;
+            if (!_decisionCounts.TryGetValue(modelName, out var counts)) _decisionCounts[modelName] = counts = new int[5];
+
             var part = smr.gameObject.name;
+            var p = Copy.Vertices(mesh);
             MeshState source = null;
             foreach (var st in _states.Values)
-                if (st.Model == "PreviewModelOrigin" && st.Part == part && st.Written != null && st.Original != null)
+                if (IsSourceName(st.Model) && st.Part == part && st.Written != null && st.Original != null &&
+                    st.Original.Length == p.Length && st.Written.Length == p.Length)
                 { source = st; break; }
-            if (source == null || source.Written == source.Original) return false;
-            var p = Copy.Vertices(mesh);
-            if (p.Length != source.Original.Length || p.Length != source.Written.Length) return false;
-            double dO = 0, dW = 0; int n = 0;
-            int step = Math.Max(1, p.Length / 500);
-            for (int i = 0; i < p.Length; i += step) { dO += (p[i] - source.Original[i]).sqrMagnitude; dW += (p[i] - source.Written[i]).sqrMagnitude; n++; }
-            if (n == 0) return false;
-            bool inherited = dW < dO * 0.25 && dO > 1e-12;
-            if (!inherited) return false;   // fresh (or different layout): reshape it normally
-            _states[id] = new MeshState { Mesh = mesh, Original = source.Original, Written = p, Key = source.Key, Model = "PhotoBoothModel", Part = part };
-            CopiesSkipped++;
-            return true;
+
+            char result;
+            if (source != null && !Identical(source.Written, source.Original))
+            {
+                double dO = 0, dW = 0;
+                int step = Math.Max(1, p.Length / 500);
+                for (int i = 0; i < p.Length; i += step) { dO += (p[i] - source.Original[i]).sqrMagnitude; dW += (p[i] - source.Written[i]).sqrMagnitude; }
+                if (dW < dO * 0.25)
+                {
+                    _states[id] = new MeshState { Mesh = mesh, Original = source.Original, Written = p, Key = source.Key, Model = modelName, Part = part };
+                    CopiesSkipped++;
+                    counts[0]++; counts[3]++;
+                    _decision[id] = 'F';      // follows slider changes from now on
+                    return 'F';
+                }
+                if (dO < dW * 0.25) { counts[1]++; counts[4]++; return _decision[id] = 'F'; }
+            }
+            else if (source != null)
+            {
+                // The source part isn't changed by the sliders: nothing to tell apart, and nothing to do.
+                counts[1]++;
+                return _decision[id] = 'F';
+            }
+            // Can't tell from this mesh: go with what this model's other meshes clearly showed.
+            if (counts[3] + counts[4] >= 3) result = counts[4] > counts[3] ? 'F' : 'L';
+            else if (modelName == "PhotoBoothModel") result = 'F';
+            else return 'L';                  // not decided yet: look again on the next pass
+            counts[result == 'F' ? 1 : 2]++;
+            return _decision[id] = result;
         }
 
         private void Process(SkinnedMeshRenderer smr, Mesh mesh, string key, Rig rig)
