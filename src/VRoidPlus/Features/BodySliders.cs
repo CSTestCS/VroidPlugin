@@ -122,6 +122,7 @@ namespace VRoidPlus
             public Vector3[] Original;
             public Vector3[] Written;
             public string Key; // the slider values Written was made with
+            public string Model, Part;     // e.g. "PreviewModelOrigin", "Body" (to match photo mode's copy)
             public BoneWeight[] Weights;   // cached: read once per original mesh
             public Matrix4x4[] Bind;
             public readonly Queue<float> Overwrites = new();
@@ -153,7 +154,10 @@ namespace VRoidPlus
         {
             var n = a.gameObject.name;
             if (n.StartsWith("CurrentModelOrigin", StringComparison.Ordinal) || n == "PreviewModelOrigin") return false;
-            if (n == "PhotoBoothModel" || n == "MeshReductionReference") return true;
+            // Photo mode's model is built when photo mode opens, usually from the not-yet-reshaped preview, so
+            // it is reshaped too; meshes that did inherit the shape are recognised per mesh (TryInherit).
+            if (n == "PhotoBoothModel") return false;
+            if (n == "MeshReductionReference") return true;
             var id = a.GetInstanceID();
             if (_derivedCache.TryGetValue(id, out var known)) return known;
             bool derived = false;
@@ -280,7 +284,10 @@ namespace VRoidPlus
                     if (_unaffected.Contains(meshId + "|" + key)) continue;
                     if (!mesh.isReadable) { unreadable++; continue; }
                     rig ??= new Rig(animator);
+                    var modelName = animator.gameObject.name;
+                    if (modelName == "PhotoBoothModel" && TryInherit(smr, mesh, key)) continue;
                     Process(smr, mesh, key, rig);
+                    if (_states.TryGetValue(mesh.GetInstanceID(), out var done) && done.Model == null) { done.Model = modelName; done.Part = smr.gameObject.name; }
 
                     if (_clock.Elapsed.TotalMilliseconds > FrameBudgetMs) { outOfTime = true; BudgetHits++; }
                 }
@@ -344,6 +351,35 @@ namespace VRoidPlus
 
         /// <summary>A slider's bone pair resolved on one model.</summary>
         private struct Seg { public Transform Bone, Toward; public Mode Mode; public float Factor; }
+
+        /// <summary>
+        /// For a photo mode mesh seen for the first time: compare it with the preview model's mesh of the same
+        /// part before (original) and after (reshaped). If it is clearly the reshaped one, it inherited the
+        /// slider shape: remember the preview's original for it (so it follows later slider changes) instead of
+        /// reshaping it again. Returns true when handled that way.
+        /// </summary>
+        private bool TryInherit(SkinnedMeshRenderer smr, Mesh mesh, string key)
+        {
+            int id = mesh.GetInstanceID();
+            if (_states.TryGetValue(id, out var known) && known.Mesh == mesh) return false;   // already decided
+            var part = smr.gameObject.name;
+            MeshState source = null;
+            foreach (var st in _states.Values)
+                if (st.Model == "PreviewModelOrigin" && st.Part == part && st.Written != null && st.Original != null)
+                { source = st; break; }
+            if (source == null || source.Written == source.Original) return false;
+            var p = Copy.Vertices(mesh);
+            if (p.Length != source.Original.Length || p.Length != source.Written.Length) return false;
+            double dO = 0, dW = 0; int n = 0;
+            int step = Math.Max(1, p.Length / 500);
+            for (int i = 0; i < p.Length; i += step) { dO += (p[i] - source.Original[i]).sqrMagnitude; dW += (p[i] - source.Written[i]).sqrMagnitude; n++; }
+            if (n == 0) return false;
+            bool inherited = dW < dO * 0.25 && dO > 1e-12;
+            if (!inherited) return false;   // fresh (or different layout): reshape it normally
+            _states[id] = new MeshState { Mesh = mesh, Original = source.Original, Written = p, Key = source.Key, Model = "PhotoBoothModel", Part = part };
+            CopiesSkipped++;
+            return true;
+        }
 
         private void Process(SkinnedMeshRenderer smr, Mesh mesh, string key, Rig rig)
         {
