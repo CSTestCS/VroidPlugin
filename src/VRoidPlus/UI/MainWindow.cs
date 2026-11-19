@@ -394,6 +394,8 @@ namespace VRoidPlus
             }
             var freeHead = Ui.Toggle(s.FbxFreeHead, "Let photo mode control the head (the rest of the body keeps the animation/pose)");
             if (freeHead != s.FbxFreeHead) { s.FbxFreeHead = freeHead; Settings.Save(); }
+            var freeFingers = Ui.Toggle(s.FbxFreeFingers, "Let photo mode control the fingers (hands and the rest of the body keep the animation/pose)");
+            if (freeFingers != s.FbxFreeFingers) { s.FbxFreeFingers = freeFingers; Settings.Save(); }
             if (Ui.Button("Unload (back to VRoid poses)", 220)) p.Unload();
         }
 

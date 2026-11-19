@@ -82,6 +82,8 @@ namespace VRoidPlus
         public bool FbxApplyRootMotion = false;
         /// <summary>Leave the head to photo mode (e.g. looking at the camera) while the body plays the FBX.</summary>
         public bool FbxFreeHead = false;
+        /// <summary>Leave the fingers to photo mode (hand poses) while the rest, hands included, plays the FBX.</summary>
+        public bool FbxFreeFingers = false;
         public float WindowX = 20, WindowY = 60, WindowW = 460, WindowH = 620;
     }
 

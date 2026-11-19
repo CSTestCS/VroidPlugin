@@ -109,6 +109,11 @@ namespace VRoidPlus.Fbx
         private Animator _target;
         private Transform _targetHips;
 
+        /// <summary>Thumb/index/middle/ring/little bones of either hand (not the hand bones themselves).</summary>
+        private static bool IsFinger(HumanBodyBones b) =>
+            (b >= HumanBodyBones.LeftThumbProximal && b <= HumanBodyBones.LeftLittleDistal) ||
+            (b >= HumanBodyBones.RightThumbProximal && b <= HumanBodyBones.RightLittleDistal);
+
         /// <summary>False once VRoid rebuilt the model (new skeleton) or the model is gone.</summary>
         public bool IsAttachedTo(Animator a)
         {
@@ -189,7 +194,8 @@ namespace VRoidPlus.Fbx
         }
 
         /// <param name="freeHead">Don't touch the head bone: it keeps the rotation VRoid/photo mode gives it, on top of the animated neck.</param>
-        public void Apply(FbxTake take, double time, bool rootMotion, bool freeHead = false)
+        /// <param name="freeFingers">Don't touch the finger bones (the hands themselves still follow the animation).</param>
+        public void Apply(FbxTake take, double time, bool rootMotion, bool freeHead = false, bool freeFingers = false)
         {
             if (_target == null) return;
             var g = _scene.Evaluate(take, time);
@@ -200,6 +206,7 @@ namespace VRoidPlus.Fbx
             {
                 if (bone == HumanBodyBones.LeftEye || bone == HumanBodyBones.RightEye || bone == HumanBodyBones.Jaw) continue;
                 if (freeHead && bone == HumanBodyBones.Head) continue;
+                if (freeFingers && IsFinger(bone)) continue;
                 if (!_source.TryGetValue(bone, out var src)) { t.localRotation = Quaternion.identity; continue; }
                 var delta = FbxScene.Rotation(g[src]) * Quaternion.Inverse(_srcRestRot[bone]);
                 t.rotation = _facing * delta * Quaternion.Inverse(_facing) * tgtRest;
