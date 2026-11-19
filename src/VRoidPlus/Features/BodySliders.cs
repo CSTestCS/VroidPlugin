@@ -147,16 +147,6 @@ namespace VRoidPlus
             return h.ToHashCode();
         }
 
-        /// <summary>
-        /// The model copies VRoid shows you: the editor model and photo mode's model. Everything else VRoid
-        /// builds (export/upload preview, mesh reduction) is made from the editor's meshes, which already carry
-        /// the slider changes, so reshaping those again would double the effect in exports.
-        /// </summary>
-        private static bool IsShownModel(Animator a)
-        {
-            var n = a.gameObject.name;
-            return n.StartsWith("CurrentModelOrigin", StringComparison.Ordinal) || n == "PhotoBoothModel";
-        }
         private float _nextCheck;
         private bool _dirty = true;
 
@@ -216,13 +206,13 @@ namespace VRoidPlus
             int seen = 0, unreadable = 0, noMesh = 0, models = 0;
             var key = Key();
             if (key != _lastKey) { _unaffected.Clear(); _lastKey = key; }
-            var humanoids = Avatar.AllHumanoids();
-            bool anyKnown = humanoids.Any(a => a != null && IsShownModel(a));
-            foreach (var animator in humanoids)
+            // Every copy of the character VRoid builds: the editor model, photo mode's models and the models it
+            // exports/uploads from. VRoid makes some of these by copying another copy's meshes; a copy made
+            // after we reshaped its source already has the slider changes and is recognised by fingerprint
+            // (see _writtenPrints), so each copy ends up reshaped exactly once.
+            foreach (var animator in Avatar.AllHumanoids())
             {
                 if (animator == null) continue;
-                // Other VRoid versions may name models differently: then fall back to the chosen avatar only.
-                if (anyKnown ? !IsShownModel(animator) : animator != Avatar.Animator) continue;
                 models++;
                 Rig rig = null;
                 foreach (var smr in animator.GetComponentsInChildren<SkinnedMeshRenderer>(false))
