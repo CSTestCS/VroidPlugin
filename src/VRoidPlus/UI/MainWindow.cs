@@ -333,8 +333,53 @@ namespace VRoidPlus
             }
 
             Ui.Space(4);
+            var sqOn = body.GetSquish("L", "depth") > 0f || body.GetSquish("R", "depth") > 0f;
+            if (Ui.Button(s.ShowThighSquish ? "Hide thigh squish" : $"Thigh squish (sock line)...{(sqOn ? " - on" : "")}", 0))
+            { s.ShowThighSquish = !s.ShowThighSquish; Settings.Save(); }
+            if (s.ShowThighSquish) changed |= DrawThighSquish(body);
+
+            Ui.Space(4);
             if (Ui.Button("Reset all to 100%", 140)) { body.ResetAll(); changed = true; }
             if (changed) body.MarkDirty();
+        }
+
+        private bool DrawThighSquish(BodySliders body)
+        {
+            Hint("Slims each leg below a line you set, like the band of a thigh-high sock pressing in. Nothing above the line gets bigger. Set Depth above 0% to turn it on, then move the line to the top of the sock.");
+            bool changed = false;
+            foreach (var (side, name) in new[] { ("L", "Left leg"), ("R", "Right leg") })
+            {
+                Header(name);
+                changed |= SquishSlider(body, side, "line", "Line height", 0f, 1f, v => $"{v * 100:F0}%", "0% = hip, 100% = knee");
+                changed |= SquishSlider(body, side, "depth", "Depth", 0f, 0.3f, v => $"{v * 100:F1}%", null);
+                changed |= SquishSlider(body, side, "soft", "Edge softness", 0f, 1f, v => $"{v * 100:F0}%", "0% = crisp, 100% = rounded");
+                var fade = body.GetSquish(side, "fade") > 0.5f;
+                var nf = Ui.Toggle(fade, "Fade back to normal further down (like an elastic band)");
+                if (nf != fade) { body.SetSquish(side, "fade", nf ? 1f : 0f); changed = true; }
+                if (nf) changed |= SquishSlider(body, side, "fadelen", "Fade length", 0.05f, 1f, v => $"{v * 100:F0}%", "of the thigh's length");
+                Ui.BeginRow(0);
+                var other = side == "L" ? "R" : "L";
+                if (Ui.Button($"Copy to {(side == "L" ? "right" : "left")} leg", 150)) { body.CopySquish(side, other); changed = true; }
+                if (Ui.Button("Reset", 60)) { body.ResetSquish(side); changed = true; }
+                Ui.EndRow();
+            }
+            return changed;
+        }
+
+        private static bool SquishSlider(BodySliders body, string side, string param, string label, float min, float max, Func<float, string> fmt, string hint)
+        {
+            var v = body.GetSquish(side, param);
+            Ui.BeginRow(110);
+            Ui.Label(label, Ui.Wrap, 120);
+            var nv = Ui.Slider(v, min, max);
+            Ui.Label(fmt(nv), Ui.Wrap, 48);
+            if (Ui.Button("Reset", 52)) nv = BodySliders.SquishDefaults[param];
+            Ui.EndRow();
+            if (hint != null) Hint("    " + hint);
+            nv = Mathf.Round(nv * 1000f) / 1000f;
+            if (Mathf.Approximately(nv, v)) return false;
+            body.SetSquish(side, param, nv);
+            return true;
         }
 
         private static bool Slider(BodySliders.SliderDef def)

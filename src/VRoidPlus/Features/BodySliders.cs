@@ -114,7 +114,47 @@ namespace VRoidPlus
             _dirty = true;
         }
 
-        public void ResetAll() { File.Values.Clear(); _dirty = true; }
+        /// <summary>Resets the body sliders (not the thigh squish settings).</summary>
+        public void ResetAll() { foreach (var d in Sliders) File.Values.Remove(d.Id); _dirty = true; }
+
+        // ---------------------------------------------------------------- thigh squish
+        // Per leg ("L"/"R"): line height (0 = hip, 1 = knee), depth (0..0.3 slimming below the line),
+        // edge softness (0 crisp .. 1 rounded), fade back on/off and fade length (in thigh lengths).
+
+        public static readonly Dictionary<string, float> SquishDefaults = new()
+        {
+            ["line"] = 0.6f, ["depth"] = 0f, ["soft"] = 0.3f, ["fade"] = 1f, ["fadelen"] = 0.35f,
+        };
+
+        public static string SquishKey(string side, string p) => $"squish.{side}.{p}";
+
+        public float GetSquish(string side, string p) =>
+            File.Values.TryGetValue(SquishKey(side, p), out var v) ? v : SquishDefaults[p];
+
+        public void SetSquish(string side, string p, float v)
+        {
+            if (Mathf.Approximately(v, SquishDefaults[p])) File.Values.Remove(SquishKey(side, p)); else File.Values[SquishKey(side, p)] = v;
+            _dirty = true;
+        }
+
+        public void CopySquish(string from, string to)
+        {
+            foreach (var p in SquishDefaults.Keys) SetSquish(to, p, GetSquish(from, p));
+        }
+
+        public void ResetSquish(string side) { foreach (var p in SquishDefaults.Keys) File.Values.Remove(SquishKey(side, p)); _dirty = true; }
+
+        private struct SquishParams { public float Line, Depth, Soft, FadeLen; public bool Fade; }
+
+        private SquishParams Squish(string side) => new()
+        {
+            Line = Mathf.Clamp01(GetSquish(side, "line")),
+            Depth = Mathf.Clamp(GetSquish(side, "depth"), 0f, 0.5f),
+            // softness 0..1 -> edge width 0.4%..10% of the thigh's length
+            Soft = Mathf.Lerp(0.004f, 0.10f, Mathf.Clamp01(GetSquish(side, "soft"))),
+            Fade = GetSquish(side, "fade") > 0.5f,
+            FadeLen = Mathf.Clamp(GetSquish(side, "fadelen"), 0.02f, 1.5f),
+        };
 
         private class MeshState
         {
@@ -186,7 +226,8 @@ namespace VRoidPlus
 
         public bool AllDefault => File.Values.Count == 0;
 
-        private string Key() => string.Join("|", Sliders.Select(s => Get(s.Id).ToString("F3")));
+        private string Key() => string.Join("|", Sliders.Select(s => Get(s.Id).ToString("F3"))) + "|" +
+                                string.Join("|", new[] { "L", "R" }.SelectMany(side => SquishDefaults.Keys.Select(p => GetSquish(side, p).ToString("F3"))));
 
         /// <summary>smr instance id -> mesh instance id last seen (VRoid swapping a mesh shows up here at once)</summary>
         private readonly Dictionary<int, int> _meshOf = new();
@@ -439,6 +480,9 @@ namespace VRoidPlus
             var girthF = new float[bones.Length];
             var sizeF = new float[bones.Length];
             var rearF = new float[bones.Length];
+            var sqSide = new int[bones.Length];      // 0 none, 1 left leg, 2 right leg
+            var sqCalf = new bool[bones.Length];
+            var sqL = Squish("L"); var sqR = Squish("R");
             bool any = false;
             for (int i = 0; i < bones.Length; i++)
             {
@@ -477,6 +521,21 @@ namespace VRoidPlus
                     }
                 }
                 if (!Mathf.Approximately(girthF[i], 1f) || !Mathf.Approximately(sizeF[i], 1f) || !Mathf.Approximately(rearF[i], 1f) || !Mathf.Approximately(widthF[i], 1f)) any = true;
+
+                // Thigh squish: thigh and calf bones (and their J_Adj_ helpers) of a leg whose depth is set.
+                if (owner != null)
+                {
+                    for (int side = 0; side < 2; side++)
+                    {
+                        var sp = side == 0 ? sqL : sqR;
+                        if (sp.Depth <= 0f) continue;
+                        var upper = rig.Bone(side == 0 ? HumanBodyBones.LeftUpperLeg : HumanBodyBones.RightUpperLeg);
+                        var lower = rig.Bone(side == 0 ? HumanBodyBones.LeftLowerLeg : HumanBodyBones.RightLowerLeg);
+                        if (upper == null || lower == null) continue;
+                        if (owner == upper) { sqSide[i] = side + 1; sqCalf[i] = false; any = true; }
+                        else if (owner == lower) { sqSide[i] = side + 1; sqCalf[i] = true; any = true; }
+                    }
+                }
             }
             if (!any && !_states.ContainsKey(mesh.GetInstanceID())) { _unaffected.Add(mesh.GetInstanceID() + "|" + key); return; }
 
@@ -527,7 +586,7 @@ namespace VRoidPlus
             var hipsBone = rig.Bone(HumanBodyBones.Hips);
             for (int i = 0; i < bones.Length; i++)
             {
-                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f) && Mathf.Approximately(rearF[i], 1f) && Mathf.Approximately(widthF[i], 1f)) continue;
+                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f) && Mathf.Approximately(rearF[i], 1f) && Mathf.Approximately(widthF[i], 1f) && sqSide[i] == 0) continue;
                 d.Active[i] = true;
                 d.BindInv[i] = bind[i].inverse;
                 if (girthSeg[i] >= 0)
@@ -555,6 +614,29 @@ namespace VRoidPlus
                         d.WidthStart[i] = bones[i].InverseTransformPoint(wseg.Bone.position);
                         d.WidthAxis[i] = bones[i].InverseTransformPoint(wseg.Toward.position) - d.WidthStart[i];
                         d.WidthIsLeg[i] = true;
+                    }
+                }
+                if (sqSide[i] > 0)
+                {
+                    // Position along the leg in thigh lengths: 0 at the hip joint, 1 at the knee, beyond 1 on the calf.
+                    bool left = sqSide[i] == 1;
+                    var upper = rig.Bone(left ? HumanBodyBones.LeftUpperLeg : HumanBodyBones.RightUpperLeg);
+                    var lower = rig.Bone(left ? HumanBodyBones.LeftLowerLeg : HumanBodyBones.RightLowerLeg);
+                    var foot = rig.Bone(left ? HumanBodyBones.LeftFoot : HumanBodyBones.RightFoot);
+                    var from = sqCalf[i] ? lower : upper;
+                    var to = sqCalf[i] ? foot : lower;
+                    if (from != null && to != null)
+                    {
+                        var thighLen = Vector3.Distance(upper.position, lower.position);
+                        var segLen = Vector3.Distance(from.position, to.position);
+                        d.SqActive[i] = thighLen > 1e-5f;
+                        d.SqStart[i] = bones[i].InverseTransformPoint(from.position);
+                        d.SqAxis[i] = bones[i].InverseTransformPoint(to.position) - d.SqStart[i];
+                        d.SqU0[i] = sqCalf[i] ? 1f : 0f;
+                        d.SqUScale[i] = thighLen > 1e-5f ? segLen / thighLen : 1f;
+                        var sp = left ? sqL : sqR;
+                        d.SqLine[i] = sp.Line; d.SqDepth[i] = sp.Depth; d.SqSoft[i] = sp.Soft;
+                        d.SqFadeLen[i] = sp.Fade ? sp.FadeLen : 0f;
                     }
                 }
                 if (rearSeg[i] >= 0)
@@ -604,6 +686,9 @@ namespace VRoidPlus
             public readonly Vector3[] WidthRight, WidthCenter, WidthShift, WidthStart, WidthAxis;
             public readonly bool[] WidthIsLeg;
             public float[] WidthF;
+            public readonly bool[] SqActive;
+            public readonly Vector3[] SqStart, SqAxis;
+            public readonly float[] SqU0, SqUScale, SqLine, SqDepth, SqSoft, SqFadeLen;
             public readonly Matrix4x4[] BindInv;
             public float[] GirthF, SizeF, RearF;
             public Matrix4x4[] Bind;
@@ -616,6 +701,9 @@ namespace VRoidPlus
                 RearFade = new float[n];
                 WidthRight = new Vector3[n]; WidthCenter = new Vector3[n]; WidthShift = new Vector3[n];
                 WidthStart = new Vector3[n]; WidthAxis = new Vector3[n]; WidthIsLeg = new bool[n];
+                SqActive = new bool[n]; SqStart = new Vector3[n]; SqAxis = new Vector3[n];
+                SqU0 = new float[n]; SqUScale = new float[n]; SqLine = new float[n]; SqDepth = new float[n];
+                SqSoft = new float[n]; SqFadeLen = new float[n];
                 BindInv = new Matrix4x4[n];
             }
         }
@@ -686,11 +774,43 @@ namespace VRoidPlus
                 }
             }
 
+            // Thigh squish: slim the leg below the line (nothing above it changes). The slimming comes in over a
+            // short soft edge just below the line and, with fade back on, eases out again further down.
+            if (d.SqActive[bi])
+            {
+                var a = d.SqAxis[bi];
+                var len2 = a.sqrMagnitude;
+                if (len2 > 1e-8f)
+                {
+                    var rel = local - d.SqStart[bi];
+                    var raw = Vector3.Dot(rel, a) / len2;
+                    var u = d.SqU0[bi] + Mathf.Max(0f, raw) * d.SqUScale[bi];
+                    var below = u - d.SqLine[bi];
+                    if (below > 0f)
+                    {
+                        var edge = Smooth(below / d.SqSoft[bi]);
+                        var keep = d.SqFadeLen[bi] > 0f ? 1f - Smooth((below - d.SqSoft[bi]) / d.SqFadeLen[bi]) : 1f;
+                        var k = d.SqDepth[bi] * edge * keep;
+                        if (k > 0f)
+                        {
+                            var radial = rel - a * Mathf.Clamp01(raw);
+                            localDelta -= radial * k;
+                        }
+                    }
+                }
+            }
+
             // Size: scale evenly around the joint (applied to the adjusted position).
             if (!Mathf.Approximately(d.SizeF[bi], 1f))
                 localDelta += (local + localDelta - d.SizePivot[bi]) * (d.SizeF[bi] - 1f);
 
             return d.BindInv[bi].MultiplyVector(localDelta) * w;
+        }
+
+        private static float Smooth(float x)
+        {
+            x = Mathf.Clamp01(x);
+            return x * x * (3f - 2f * x);
         }
 
         private static bool Identical(Vector3[] a, Vector3[] b)
