@@ -12,7 +12,7 @@ namespace VRoidPlus
     {
         public const string Guid = "com.vroidplus.plugin";
         public const string Name = "VRoid Plus";
-        public const string Version = "0.1.20";
+        public const string Version = "0.1.21";
 
         internal static ManualLogSource Logger;
 

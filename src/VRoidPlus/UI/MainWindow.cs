@@ -437,6 +437,11 @@ namespace VRoidPlus
                 var rm = Ui.Toggle(s.FbxApplyRootMotion, "Allow the model to move around (root motion)");
                 if (loop != s.FbxLoop || rm != s.FbxApplyRootMotion) { s.FbxLoop = loop; s.FbxApplyRootMotion = rm; Settings.Save(); }
             }
+            var mirror = Ui.Toggle(s.FbxMirror, "Mirror pose (swap left and right)");
+            if (mirror != s.FbxMirror) { s.FbxMirror = mirror; Settings.Save(); }
+            var pausedHead = Ui.Toggle(s.FbxHeadEditableWhilePaused, "While paused (or for a still pose), keep VRoid's controller and let me pose the head with it");
+            if (pausedHead != s.FbxHeadEditableWhilePaused) { s.FbxHeadEditableWhilePaused = pausedHead; Settings.Save(); }
+            if (p.Holding && s.FbxHeadEditableWhilePaused) Hint("The body holds the pose; turn on Show Controller in VRoid to pose the head." + (p.Paused ? " Press Play to hand the head back to the animation." : ""));
             var freeHead = Ui.Toggle(s.FbxFreeHead, "Let photo mode control the head (the rest of the body keeps the animation/pose)");
             if (freeHead != s.FbxFreeHead) { s.FbxFreeHead = freeHead; Settings.Save(); }
             var freeFingers = Ui.Toggle(s.FbxFreeFingers, "Let photo mode control the fingers (hands and the rest of the body keep the animation/pose)");

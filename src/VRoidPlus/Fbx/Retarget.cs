@@ -109,6 +109,26 @@ namespace VRoidPlus.Fbx
         private Animator _target;
         private Transform _targetHips;
 
+        private Vector3 _mirrorNormal = Vector3.right;
+
+        /// <summary>LeftUpperArm -> RightUpperArm and so on; centre bones map to themselves.</summary>
+        private static HumanBodyBones Opposite(HumanBodyBones b)
+        {
+            var n = b.ToString();
+            if (n.StartsWith("Left")) n = "Right" + n.Substring(4);
+            else if (n.StartsWith("Right")) n = "Left" + n.Substring(5);
+            else return b;
+            return Enum.TryParse<HumanBodyBones>(n, out var o) ? o : b;
+        }
+
+        /// <summary>A rotation reflected across the plane with the given normal (the body's left-right axis).</summary>
+        private static Quaternion MirrorRotation(Quaternion q, Vector3 n)
+        {
+            var v = new Vector3(q.x, q.y, q.z);
+            var m = -v + 2f * Vector3.Dot(v, n) * n;
+            return new Quaternion(m.x, m.y, m.z, q.w);
+        }
+
         /// <summary>Thumb/index/middle/ring/little bones of either hand (not the hand bones themselves).</summary>
         private static bool IsFinger(HumanBodyBones b) =>
             (b >= HumanBodyBones.LeftThumbProximal && b <= HumanBodyBones.LeftLittleDistal) ||
@@ -191,11 +211,13 @@ namespace VRoidPlus.Fbx
             var tgtRight = Vector3.ProjectOnPlane(root.rotation * tgtRightLocal, Vector3.up);
             var srcRight = Vector3.ProjectOnPlane(_srcRight, Vector3.up);
             _facing = srcRight.sqrMagnitude > 1e-8f && tgtRight.sqrMagnitude > 1e-8f ? Quaternion.FromToRotation(srcRight.normalized, tgtRight.normalized) : Quaternion.identity;
+            _mirrorNormal = tgtRight.sqrMagnitude > 1e-8f ? tgtRight.normalized : root.right;
         }
 
         /// <param name="freeHead">Don't touch the head bone: it keeps the rotation VRoid/photo mode gives it, on top of the animated neck.</param>
         /// <param name="freeFingers">Don't touch the finger bones (the hands themselves still follow the animation).</param>
-        public void Apply(FbxTake take, double time, bool rootMotion, bool freeHead = false, bool freeFingers = false)
+        /// <param name="mirror">Swap left and right: each bone takes its opposite's motion, reflected across the body's centre plane.</param>
+        public void Apply(FbxTake take, double time, bool rootMotion, bool freeHead = false, bool freeFingers = false, bool mirror = false)
         {
             if (_target == null) return;
             var g = _scene.Evaluate(take, time);
@@ -207,13 +229,17 @@ namespace VRoidPlus.Fbx
                 if (bone == HumanBodyBones.LeftEye || bone == HumanBodyBones.RightEye || bone == HumanBodyBones.Jaw) continue;
                 if (freeHead && bone == HumanBodyBones.Head) continue;
                 if (freeFingers && IsFinger(bone)) continue;
-                if (!_source.TryGetValue(bone, out var src)) { t.localRotation = Quaternion.identity; continue; }
-                var delta = FbxScene.Rotation(g[src]) * Quaternion.Inverse(_srcRestRot[bone]);
-                t.rotation = _facing * delta * Quaternion.Inverse(_facing) * tgtRest;
+                var srcBone = mirror ? Opposite(bone) : bone;
+                if (!_source.TryGetValue(srcBone, out var src)) { t.localRotation = Quaternion.identity; continue; }
+                var delta = FbxScene.Rotation(g[src]) * Quaternion.Inverse(_srcRestRot[srcBone]);
+                var world = _facing * delta * Quaternion.Inverse(_facing);
+                if (mirror) world = MirrorRotation(world, _mirrorNormal);
+                t.rotation = world * tgtRest;
             }
 
             var hips = _target.GetBoneTransform(HumanBodyBones.Hips);
             var move = _facing * (FbxScene.Position(g[_source[HumanBodyBones.Hips]]) - _srcHipsRest) * _scale;
+            if (mirror) move -= 2f * Vector3.Dot(move, _mirrorNormal) * _mirrorNormal;
             if (!rootMotion) move = new Vector3(0, move.y, 0);
             var restWorld = hips.parent != null ? hips.parent.TransformPoint(_tgtHipsRestLocal) : _tgtHipsRestLocal;
             hips.position = restWorld + move;

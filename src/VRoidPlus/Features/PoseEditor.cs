@@ -72,6 +72,12 @@ namespace VRoidPlus
         public string Status = "";
         private float _nextForceOff;
 
+        /// <summary>The head is left to VRoid when that's chosen, or while paused so you can pose it with the controller.</summary>
+        private bool FreeHead => Settings.Current.FbxFreeHead || (Holding && Settings.Current.FbxHeadEditableWhilePaused);
+
+        /// <summary>Paused animation, or a static pose (nothing to play): the pose is being held.</summary>
+        public bool Holding => Loaded && (Paused || Take == null || Take.Length <= 0);
+
         public bool Loaded => Scene != null && Retarget != null;
         public bool Playing => Loaded && !Paused;
         public FbxTake Take => Loaded && Scene.Takes.Count > 0 ? Scene.Takes[Mathf.Clamp(TakeIndex, 0, Scene.Takes.Count - 1)] : null;
@@ -124,7 +130,9 @@ namespace VRoidPlus
                 Time0 += Time.unscaledDeltaTime;
                 if (len > 0 && Time0 > len) Time0 = Settings.Current.FbxLoop ? Time0 % len : len;
             }
-            if (Time.unscaledTime > _nextForceOff) { _nextForceOff = Time.unscaledTime + 1f; ForceControllersOff(); }
+            // While paused (and head editing is allowed), leave VRoid's controllers alone so the head can be posed.
+            bool editingPaused = Holding && Settings.Current.FbxHeadEditableWhilePaused;
+            if (!editingPaused && Time.unscaledTime > _nextForceOff) { _nextForceOff = Time.unscaledTime + 1f; ForceControllersOff(); }
         }
 
         /// <summary>Runs after VRoid's animator/pose has been applied, so the FBX pose wins.</summary>
@@ -141,7 +149,7 @@ namespace VRoidPlus
                 rt.Attach(main);
                 Retarget = rt;
             }
-            Retarget.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion, Settings.Current.FbxFreeHead, Settings.Current.FbxFreeFingers);
+            Retarget.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion, FreeHead, Settings.Current.FbxFreeFingers, Settings.Current.FbxMirror);
 
             // Photo mode shows its own copies of the model: drive those too.
             var alive = new HashSet<int>();
@@ -155,7 +163,7 @@ namespace VRoidPlus
                     try { rt = new Retargeter(Scene); rt.Attach(a); _perModel[id] = rt; }
                     catch (Exception e) { Plugin.Logger.LogWarning("FBX on " + a.name + ": " + e.Message); continue; }
                 }
-                rt.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion, Settings.Current.FbxFreeHead, Settings.Current.FbxFreeFingers);
+                rt.Apply(Take, Time0, Settings.Current.FbxApplyRootMotion, FreeHead, Settings.Current.FbxFreeFingers, Settings.Current.FbxMirror);
             }
             foreach (var gone in _perModel.Keys.Where(k => !alive.Contains(k)).ToList()) _perModel.Remove(gone);
         }
