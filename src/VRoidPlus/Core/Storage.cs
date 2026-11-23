@@ -87,8 +87,7 @@ namespace VRoidPlus
         public bool FbxFreeFingers = false;
         /// <summary>Play the FBX pose/animation mirrored (left and right swapped).</summary>
         public bool FbxMirror = false;
-        /// <summary>While paused: keep VRoid's controllers available and let them pose the head.</summary>
-        public bool FbxHeadEditableWhilePaused = true;
+
         public float WindowX = 20, WindowY = 60, WindowW = 460, WindowH = 620;
     }
 

@@ -439,11 +439,11 @@ namespace VRoidPlus
             }
             var mirror = Ui.Toggle(s.FbxMirror, "Mirror pose (swap left and right)");
             if (mirror != s.FbxMirror) { s.FbxMirror = mirror; Settings.Save(); }
-            var pausedHead = Ui.Toggle(s.FbxHeadEditableWhilePaused, "While paused (or for a still pose), keep VRoid's controller and let me pose the head with it");
-            if (pausedHead != s.FbxHeadEditableWhilePaused) { s.FbxHeadEditableWhilePaused = pausedHead; Settings.Save(); }
-            if (p.Holding && s.FbxHeadEditableWhilePaused) Hint("The body holds the pose; turn on Show Controller in VRoid to pose the head." + (p.Paused ? " Press Play to hand the head back to the animation." : ""));
             var freeHead = Ui.Toggle(s.FbxFreeHead, "Let photo mode control the head (the rest of the body keeps the animation/pose)");
             if (freeHead != s.FbxFreeHead) { s.FbxFreeHead = freeHead; Settings.Save(); }
+            if (s.FbxFreeHead) Hint(p.Holding
+                ? "    While the pose is held (paused or a still pose), VRoid's controller stays available: turn on Show Controller to pose the head."
+                : "    Pause the animation to pose the head with VRoid's controller.");
             var freeFingers = Ui.Toggle(s.FbxFreeFingers, "Let photo mode control the fingers (hands and the rest of the body keep the animation/pose)");
             if (freeFingers != s.FbxFreeFingers) { s.FbxFreeFingers = freeFingers; Settings.Save(); }
             if (Ui.Button("Unload (back to VRoid poses)", 220)) p.Unload();
