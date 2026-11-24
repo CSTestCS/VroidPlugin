@@ -144,6 +144,29 @@ namespace VRoidPlus
 
         public void ResetSquish(string side) { foreach (var p in SquishDefaults.Keys) File.Values.Remove(SquishKey(side, p)); _dirty = true; }
 
+        // ---------------------------------------------------------------- bulges (stomach, groin)
+        // amount 0..1 (how far it sticks out), width/height 0.3..2 (size), offset -1..1 (up/down), round 0..1.
+
+        public static readonly string[] Bulges = { "stomach", "groin" };
+
+        public static readonly Dictionary<string, float> BulgeDefaults = new()
+        {
+            ["amount"] = 0f, ["width"] = 1f, ["height"] = 1f, ["offset"] = 0f, ["round"] = 0.5f,
+        };
+
+        public static string BulgeKey(string bulge, string p) => $"bulge.{bulge}.{p}";
+
+        public float GetBulge(string bulge, string p) =>
+            File.Values.TryGetValue(BulgeKey(bulge, p), out var v) ? v : BulgeDefaults[p];
+
+        public void SetBulge(string bulge, string p, float v)
+        {
+            if (Mathf.Approximately(v, BulgeDefaults[p])) File.Values.Remove(BulgeKey(bulge, p)); else File.Values[BulgeKey(bulge, p)] = v;
+            _dirty = true;
+        }
+
+        public void ResetBulge(string bulge) { foreach (var p in BulgeDefaults.Keys) File.Values.Remove(BulgeKey(bulge, p)); _dirty = true; }
+
         private struct SquishParams { public float Line, Depth, Soft, FadeLen; public bool Fade; }
 
         private SquishParams Squish(string side) => new()
@@ -227,7 +250,8 @@ namespace VRoidPlus
         public bool AllDefault => File.Values.Count == 0;
 
         private string Key() => string.Join("|", Sliders.Select(s => Get(s.Id).ToString("F3"))) + "|" +
-                                string.Join("|", new[] { "L", "R" }.SelectMany(side => SquishDefaults.Keys.Select(p => GetSquish(side, p).ToString("F3"))));
+                                string.Join("|", new[] { "L", "R" }.SelectMany(side => SquishDefaults.Keys.Select(p => GetSquish(side, p).ToString("F3")))) + "|" +
+                                string.Join("|", Bulges.SelectMany(b => BulgeDefaults.Keys.Select(p => GetBulge(b, p).ToString("F3"))));
 
         /// <summary>smr instance id -> mesh instance id last seen (VRoid swapping a mesh shows up here at once)</summary>
         private readonly Dictionary<int, int> _meshOf = new();
@@ -483,6 +507,19 @@ namespace VRoidPlus
             var sqSide = new int[bones.Length];      // 0 none, 1 left leg, 2 right leg
             var sqCalf = new bool[bones.Length];
             var sqL = Squish("L"); var sqR = Squish("R");
+            // Bulges: which main bones each one may move (vertices on their J_Adj_ helpers count too).
+            var bulgeOn = new bool[Bulges.Length];
+            var bulgeBones = new HashSet<Transform>[Bulges.Length];
+            for (int bi2 = 0; bi2 < Bulges.Length; bi2++)
+            {
+                bulgeOn[bi2] = GetBulge(Bulges[bi2], "amount") > 0f;
+                bulgeBones[bi2] = new HashSet<Transform>();
+                var list = Bulges[bi2] == "stomach"
+                    ? new[] { HumanBodyBones.Hips, HumanBodyBones.Spine, HumanBodyBones.Chest }
+                    : new[] { HumanBodyBones.Hips, HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.Spine };
+                foreach (var hb in list) { var t = rig.Bone(hb); if (t != null) bulgeBones[bi2].Add(t); }
+            }
+            var bulgeSlot = new bool[Bulges.Length, bones.Length];
             bool any = false;
             for (int i = 0; i < bones.Length; i++)
             {
@@ -521,6 +558,10 @@ namespace VRoidPlus
                     }
                 }
                 if (!Mathf.Approximately(girthF[i], 1f) || !Mathf.Approximately(sizeF[i], 1f) || !Mathf.Approximately(rearF[i], 1f) || !Mathf.Approximately(widthF[i], 1f)) any = true;
+
+                if (owner != null)
+                    for (int bi2 = 0; bi2 < Bulges.Length; bi2++)
+                        if (bulgeOn[bi2] && bulgeBones[bi2].Contains(owner)) { bulgeSlot[bi2, i] = true; any = true; }
 
                 // Thigh squish: thigh and calf bones (and their J_Adj_ helpers) of a leg whose depth is set.
                 if (owner != null)
@@ -581,12 +622,25 @@ namespace VRoidPlus
             // Per bone slot, in that bone's local space: the girth axis (start joint and direction), the size
             // pivot and the rear (butt) axis with the model's backward direction, plus their factors.
             var d = new Slots(bones.Length) { GirthF = girthF, SizeF = sizeF, RearF = rearF, WidthF = widthF, Bind = bind };
+            // Each bulge's frame on this model (world space) and its settings.
+            var bulgeFrames = new BulgeFrame?[Bulges.Length];
+            for (int bi2 = 0; bi2 < Bulges.Length; bi2++)
+            {
+                if (!bulgeOn[bi2]) continue;
+                bulgeFrames[bi2] = Frame(rig, Bulges[bi2]);
+                d.BgAmount[bi2] = Mathf.Clamp01(GetBulge(Bulges[bi2], "amount"));
+                d.BgW[bi2] = Mathf.Clamp(GetBulge(Bulges[bi2], "width"), 0.3f, 2f);
+                d.BgH[bi2] = Mathf.Clamp(GetBulge(Bulges[bi2], "height"), 0.3f, 2f);
+                d.BgRound[bi2] = Bulges[bi2] == "stomach" ? Mathf.Clamp01(GetBulge(Bulges[bi2], "round")) : 0.25f;
+            }
             var back = rig.Back;
             var right = rig.Right;
             var hipsBone = rig.Bone(HumanBodyBones.Hips);
             for (int i = 0; i < bones.Length; i++)
             {
-                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f) && Mathf.Approximately(rearF[i], 1f) && Mathf.Approximately(widthF[i], 1f) && sqSide[i] == 0) continue;
+                bool inBulge = false;
+                for (int bi2 = 0; bi2 < Bulges.Length; bi2++) inBulge |= bulgeSlot[bi2, i];
+                if (Mathf.Approximately(girthF[i], 1f) && Mathf.Approximately(sizeF[i], 1f) && Mathf.Approximately(rearF[i], 1f) && Mathf.Approximately(widthF[i], 1f) && sqSide[i] == 0 && !inBulge) continue;
                 d.Active[i] = true;
                 d.BindInv[i] = bind[i].inverse;
                 if (girthSeg[i] >= 0)
@@ -615,6 +669,17 @@ namespace VRoidPlus
                         d.WidthAxis[i] = bones[i].InverseTransformPoint(wseg.Toward.position) - d.WidthStart[i];
                         d.WidthIsLeg[i] = true;
                     }
+                }
+                for (int bi2 = 0; bi2 < Bulges.Length; bi2++)
+                {
+                    if (!bulgeSlot[bi2, i] || bulgeFrames[bi2] == null) continue;
+                    var f = bulgeFrames[bi2].Value;
+                    d.BgActive[bi2][i] = true;
+                    d.BgCenter[bi2][i] = bones[i].InverseTransformPoint(f.Center);
+                    d.BgFwd[bi2][i] = bones[i].InverseTransformDirection(f.Forward).normalized;
+                    d.BgRight[bi2][i] = bones[i].InverseTransformDirection(f.Right).normalized;
+                    d.BgUp[bi2][i] = bones[i].InverseTransformDirection(f.Up).normalized;
+                    d.BgScale[bi2][i] = bones[i].InverseTransformVector(f.Right * f.Unit).magnitude;   // world unit in this bone's space
                 }
                 if (sqSide[i] > 0)
                 {
@@ -686,6 +751,10 @@ namespace VRoidPlus
             public readonly Vector3[] WidthRight, WidthCenter, WidthShift, WidthStart, WidthAxis;
             public readonly bool[] WidthIsLeg;
             public float[] WidthF;
+            public readonly bool[][] BgActive = new bool[2][];
+            public readonly Vector3[][] BgCenter = new Vector3[2][], BgFwd = new Vector3[2][], BgRight = new Vector3[2][], BgUp = new Vector3[2][];
+            public readonly float[][] BgScale = new float[2][];
+            public readonly float[] BgAmount = new float[2], BgW = new float[2], BgH = new float[2], BgRound = new float[2];
             public readonly bool[] SqActive;
             public readonly Vector3[] SqStart, SqAxis;
             public readonly float[] SqU0, SqUScale, SqLine, SqDepth, SqSoft, SqFadeLen;
@@ -701,6 +770,11 @@ namespace VRoidPlus
                 RearFade = new float[n];
                 WidthRight = new Vector3[n]; WidthCenter = new Vector3[n]; WidthShift = new Vector3[n];
                 WidthStart = new Vector3[n]; WidthAxis = new Vector3[n]; WidthIsLeg = new bool[n];
+                for (int b = 0; b < 2; b++)
+                {
+                    BgActive[b] = new bool[n]; BgCenter[b] = new Vector3[n]; BgFwd[b] = new Vector3[n];
+                    BgRight[b] = new Vector3[n]; BgUp[b] = new Vector3[n]; BgScale[b] = new float[n];
+                }
                 SqActive = new bool[n]; SqStart = new Vector3[n]; SqAxis = new Vector3[n];
                 SqU0 = new float[n]; SqUScale = new float[n]; SqLine = new float[n]; SqDepth = new float[n];
                 SqSoft = new float[n]; SqFadeLen = new float[n];
@@ -774,6 +848,31 @@ namespace VRoidPlus
                 }
             }
 
+            // Bulges: a smooth rounded bump on the front of the body (oval, width x height), pushing the surface
+            // forward and - with roundness - also outward from the bump's centre, fading to nothing at its edge.
+            for (int b = 0; b < 2; b++)
+            {
+                if (!d.BgActive[b][bi]) continue;
+                var unit = d.BgScale[b][bi];
+                if (unit <= 1e-6f) continue;
+                var rel = local - d.BgCenter[b][bi];
+                var fwd = d.BgFwd[b][bi];
+                var depth = Vector3.Dot(rel, fwd);
+                if (depth < -0.15f * unit) continue;                         // back of the body: untouched
+                var x = Vector3.Dot(rel, d.BgRight[b][bi]) / (d.BgW[b] * unit * (b == 0 ? 0.75f : 0.45f));
+                var y = Vector3.Dot(rel, d.BgUp[b][bi]) / (d.BgH[b] * unit * (b == 0 ? 0.85f : 0.45f));
+                var r2 = x * x + y * y;
+                if (r2 >= 1f) continue;
+                var fall = 1f - r2;
+                fall = fall * fall * (3f - 2f * fall);                        // smooth dome, zero slope at the edge
+                var front = Smooth((depth + 0.15f * unit) / (0.35f * unit)); // fade in from the sides
+                var lateral = rel - fwd * depth;
+                var dir = fwd;
+                if (d.BgRound[b] > 0f && lateral.sqrMagnitude > 1e-10f)
+                    dir = Vector3.Lerp(fwd, (fwd + lateral.normalized * 0.8f).normalized, d.BgRound[b]).normalized;
+                localDelta += dir * (d.BgAmount[b] * unit * 0.6f * fall * front);
+            }
+
             // Thigh squish: slim the leg below the line (nothing above it changes). The slimming comes in over a
             // short soft edge just below the line and, with fade back on, eases out again further down.
             if (d.SqActive[bi])
@@ -805,6 +904,31 @@ namespace VRoidPlus
                 localDelta += (local + localDelta - d.SizePivot[bi]) * (d.SizeF[bi] - 1f);
 
             return d.BindInv[bi].MultiplyVector(localDelta) * w;
+        }
+
+        private struct BulgeFrame { public Vector3 Center, Forward, Right, Up; public float Unit; }
+
+        /// <summary>
+        /// Where a bulge sits on this model (world space), built from the skeleton: forward/right/up of the body,
+        /// a size unit (the hip width) and the centre - the spine joint for the stomach, between and just below the
+        /// hip joints for the groin - moved up/down by the Position setting.
+        /// </summary>
+        private BulgeFrame? Frame(Rig rig, string bulge)
+        {
+            var hips = rig.Bone(HumanBodyBones.Hips); var spine = rig.Bone(HumanBodyBones.Spine);
+            var l = rig.Bone(HumanBodyBones.LeftUpperLeg); var rl = rig.Bone(HumanBodyBones.RightUpperLeg);
+            if (hips == null || spine == null || l == null || rl == null) return null;
+            var right = rig.Right;
+            var up = Vector3.ProjectOnPlane(spine.position - hips.position, right);
+            up = up.sqrMagnitude > 1e-10f ? up.normalized : Vector3.up;
+            var forward = -rig.Back;
+            forward = Vector3.ProjectOnPlane(forward, up).normalized;
+            var unit = Mathf.Max(0.02f, Vector3.Distance(l.position, rl.position));
+            Vector3 center = bulge == "stomach"
+                ? spine.position
+                : (l.position + rl.position) * 0.5f - up * (unit * 0.35f);
+            center += up * (GetBulge(bulge, "offset") * unit * 0.8f);
+            return new BulgeFrame { Center = center, Forward = forward, Right = right, Up = up, Unit = unit };
         }
 
         private static float Smooth(float x)

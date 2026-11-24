@@ -78,6 +78,7 @@ namespace VRoidPlus
         public float CalfSize = 1f;
         public bool ShowMoreBodySliders = false;
         public bool ShowThighSquish = false;
+        public bool ShowBulges = false;
         public bool ShowDiagnosticsBanner = true;
         public bool FbxLoop = true;
         public bool FbxApplyRootMotion = false;

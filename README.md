@@ -73,7 +73,12 @@ Every slider goes from 50% to 200%, and sliders acting on the same body part com
 
 **Thigh squish (sock line)** slims each leg below a line you set, like the band of a thigh-high sock pressing in; nothing above the line gets bigger. Per leg: *Line height* (0% hip to 100% knee), *Depth*, *Edge softness* (crisp to rounded) and *Fade back* (on by default: the slimming eases out again over the *Fade length*; off: the leg stays slimmer all the way down). *Copy to other leg* mirrors the settings.
 
+**Bulges (stomach, groin)** add a smooth rounded bulge to the front of the body, with Amount, Width, Height, Position (up/down) and, for the stomach, Roundness. Tight clothing on the body follows it.
+
 Slider values and anchor choices belong to the open `.vroid` file. They're kept while you edit and stored only when you save the file in VRoid (Save or Save As). Opening another file loads its own settings; a new model starts with none. They're stored in `BepInEx\config\VRoidPlus\models\`, not inside the `.vroid` itself, so they stay on this PC.
+
+### Physics
+Makes hair, skirts and dresses, bust and other swaying parts flowier or springier: Stiffness (lower = flowier), Damping (lower = bouncier) and Gravity per category, as a percentage of VRoid's own settings. VRoid's collisions stay in place. This currently affects photo mode, where VRoid runs the physics; exports and uploads keep VRoid's own physics. Saved with the `.vroid` file.
 
 ### Pose
 - **Show Controller** is switched off each time the pose editor opens. You can turn it on again as usual. You can disable this behaviour in the Pose tab.

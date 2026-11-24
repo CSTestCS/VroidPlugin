@@ -192,6 +192,7 @@ namespace VRoidPlus
             return b;
         }
         public static readonly PoseEditor Pose = new();
+        public static readonly PhysicsTuning Physics = new();
 
         public static void Update()
         {
@@ -200,6 +201,7 @@ namespace VRoidPlus
             Safe.Run("HairAnchors", HairAnchors.Update);
             Safe.Run("AccessoryAnchors", AccessoryAnchors.Update);
             Safe.Run("Pose", Pose.Update);
+            Safe.Run("Physics", Physics.Update);
         }
 
         private static string _lastRevision = "";

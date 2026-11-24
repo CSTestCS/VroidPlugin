@@ -18,7 +18,7 @@ namespace VRoidPlus
         private Vector2 _dragOffset;
         private int _tab;
         private float _scroll, _contentHeight;
-        private readonly string[] _tabs = { "Face Sets", "Hair Merge", "Hair Anchors", "Body", "Accessories", "Pose", "Setup" };
+        private readonly string[] _tabs = { "Face Sets", "Hair Merge", "Hair Anchors", "Body", "Accessories", "Pose", "Physics", "Setup" };
 
         private const float TitleH = 24f, TabRowH = 24f, Pad = 8f;
 
@@ -85,7 +85,8 @@ namespace VRoidPlus
                     case 3: DrawBody(); break;
                     case 4: DrawAnchors(Features.AccessoryAnchors, "accessory"); break;
                     case 5: DrawPose(); break;
-                    case 6: DrawSetup(); break;
+                    case 6: DrawPhysics(); break;
+                    case 7: DrawSetup(); break;
                 }
             }
             _contentHeight = Ui.End() + 10;
@@ -262,6 +263,30 @@ namespace VRoidPlus
         }
 
 
+        private void DrawPhysics()
+        {
+            var ph = Features.Physics;
+            Text("Make hair, skirts, dresses and other swaying parts flowier or springier. VRoid's own collisions stay in place. 100% = VRoid's own settings.");
+            Hint("This affects photo mode, where VRoid runs the physics. Exports and VRoid Hub uploads keep VRoid's own physics for now. Saved with the .vroid file.");
+            Hint("Status: " + ph.Info);
+            foreach (var (cat, label) in PhysicsTuning.Categories)
+            {
+                Header(label);
+                foreach (var (p, plabel, min, max) in PhysicsTuning.Params)
+                {
+                    var v = ph.Get(cat, p);
+                    Ui.BeginRow(110);
+                    Ui.Label(plabel, Ui.Wrap, 170);
+                    var nv = Ui.Slider(v, min, max);
+                    Ui.Label($"{nv * 100:F0}%", Ui.Wrap, 48);
+                    if (Ui.Button("Reset", 52)) nv = 1f;
+                    Ui.EndRow();
+                    nv = Mathf.Round(nv * 100f) / 100f;
+                    if (!Mathf.Approximately(nv, v)) ph.Set(cat, p, nv);
+                }
+            }
+        }
+
         private void DrawHairMerge()
         {
             var h = Features.HairMerge;
@@ -339,8 +364,46 @@ namespace VRoidPlus
             if (s.ShowThighSquish) changed |= DrawThighSquish(body);
 
             Ui.Space(4);
+            var bulgeOn = BodySliders.Bulges.Any(b => body.GetBulge(b, "amount") > 0f);
+            if (Ui.Button(s.ShowBulges ? "Hide bulges" : $"Bulges (stomach, groin)...{(bulgeOn ? " - on" : "")}", 0))
+            { s.ShowBulges = !s.ShowBulges; Settings.Save(); }
+            if (s.ShowBulges) changed |= DrawBulges(body);
+
+            Ui.Space(4);
             if (Ui.Button("Reset all to 100%", 140)) { body.ResetAll(); changed = true; }
             if (changed) body.MarkDirty();
+        }
+
+        private bool DrawBulges(BodySliders body)
+        {
+            Hint("Adds a smooth rounded bulge to the front of the body. Tight clothing on the body follows it. Set Amount above 0% to turn one on.");
+            bool changed = false;
+            foreach (var (b, name) in new[] { ("stomach", "Stomach"), ("groin", "Groin") })
+            {
+                Header(name);
+                changed |= BulgeSlider(body, b, "amount", "Amount", 0f, 1f, v => $"{v * 100:F0}%");
+                changed |= BulgeSlider(body, b, "width", "Width", 0.3f, 2f, v => $"{v * 100:F0}%");
+                changed |= BulgeSlider(body, b, "height", "Height", 0.3f, 2f, v => $"{v * 100:F0}%");
+                changed |= BulgeSlider(body, b, "offset", "Position", -1f, 1f, v => v == 0 ? "0" : $"{(v > 0 ? "up " : "down ")}{Mathf.Abs(v) * 100:F0}%");
+                if (b == "stomach") changed |= BulgeSlider(body, b, "round", "Roundness", 0f, 1f, v => $"{v * 100:F0}%");
+                if (Ui.Button("Reset " + name.ToLowerInvariant(), 140)) { body.ResetBulge(b); changed = true; }
+            }
+            return changed;
+        }
+
+        private static bool BulgeSlider(BodySliders body, string bulge, string param, string label, float min, float max, Func<float, string> fmt)
+        {
+            var v = body.GetBulge(bulge, param);
+            Ui.BeginRow(130);
+            Ui.Label(label, Ui.Wrap, 120);
+            var nv = Ui.Slider(v, min, max);
+            Ui.Label(fmt(nv), Ui.Wrap, 70);
+            if (Ui.Button("Reset", 52)) nv = BodySliders.BulgeDefaults[param];
+            Ui.EndRow();
+            nv = Mathf.Round(nv * 1000f) / 1000f;
+            if (Mathf.Approximately(nv, v)) return false;
+            body.SetBulge(bulge, param, nv);
+            return true;
         }
 
         private bool DrawThighSquish(BodySliders body)
