@@ -243,15 +243,25 @@ namespace VRoidPlus
 
         public void MarkDirty() => _dirty = true;
 
+        /// <summary>Another feature changed a mesh's skin weights/bones: re-read them (keeps its original shape).</summary>
+        public void InvalidateSkin(int meshId)
+        {
+            if (_states.TryGetValue(meshId, out var st)) { st.Weights = null; st.Bind = null; st.Key = ""; }
+            _unaffected.RemoveWhere(k => k.StartsWith(meshId + "|", StringComparison.Ordinal));
+            _dirty = true;
+        }
+
         /// <summary>What the last pass did, for diagnostics.</summary>
         public string LastInfo = "not run yet";
         public int Overwritten, Applied;
 
-        public bool AllDefault => File.Values.Count == 0;
+        /// <summary>No body shape setting is in use (physics settings and an unused seam selection don't count).</summary>
+        public bool AllDefault => !File.Values.Keys.Any(k => !k.StartsWith("phys.", StringComparison.Ordinal) && !k.StartsWith("seam.", StringComparison.Ordinal)) && !Features.Seams.Active;
 
         private string Key() => string.Join("|", Sliders.Select(s => Get(s.Id).ToString("F3"))) + "|" +
                                 string.Join("|", new[] { "L", "R" }.SelectMany(side => SquishDefaults.Keys.Select(p => GetSquish(side, p).ToString("F3")))) + "|" +
-                                string.Join("|", Bulges.SelectMany(b => BulgeDefaults.Keys.Select(p => GetBulge(b, p).ToString("F3"))));
+                                string.Join("|", Bulges.SelectMany(b => BulgeDefaults.Keys.Select(p => GetBulge(b, p).ToString("F3")))) + "|" +
+                                (Features.Seams.Active ? $"seam {Features.Seams.Amount:F3} {Features.Seams.WidthSetting:F3} {string.Join(",", Features.Seams.Selected.OrderBy(x => x))} v{Features.Seams.Version}" : "seam off");
 
         /// <summary>smr instance id -> mesh instance id last seen (VRoid swapping a mesh shows up here at once)</summary>
         private readonly Dictionary<int, int> _meshOf = new();
@@ -294,6 +304,7 @@ namespace VRoidPlus
             if (!_passActive && now < _nextSwapScan) return;
             _nextSwapScan = now + 0.1f;
 
+            Features.Seams.Poll(Avatar.Animator);
             _clock.Restart();
             bool outOfTime = false;
             int seen = 0, unreadable = 0, noMesh = 0, models = 0;
@@ -361,8 +372,11 @@ namespace VRoidPlus
             private readonly Dictionary<HumanBodyBones, Transform> _bones = new();
             private readonly HashSet<int> _human = new();
 
+            public readonly Animator Animator;
+
             public Rig(Animator a)
             {
+                Animator = a;
                 for (var b = HumanBodyBones.Hips; b < HumanBodyBones.LastBone; b++)
                 {
                     var t = a.GetBoneTransform(b);
@@ -578,6 +592,7 @@ namespace VRoidPlus
                     }
                 }
             }
+            if (!any && Features.Seams.Affects(smr)) any = true;
             if (!any && !_states.ContainsKey(mesh.GetInstanceID())) { _unaffected.Add(mesh.GetInstanceID() + "|" + key); return; }
 
             int id = mesh.GetInstanceID();
@@ -726,6 +741,18 @@ namespace VRoidPlus
                 delta += Push(p, w.boneIndex2, w.weight2, d);
                 delta += Push(p, w.boneIndex3, w.weight3, d);
                 result[v] = p + delta;
+            }
+
+            // Seam squish: offsets around chosen clothing layers' edges, from the original shape.
+            if (Features.Seams.Active)
+            {
+                try
+                {
+                    var seam = Features.Seams.Offsets(rig.Animator, smr, st.Original, OriginalOf);
+                    if (seam != null && seam.Length == result.Length)
+                        for (int v = 0; v < result.Length; v++) result[v] += seam[v];
+                }
+                catch (Exception e) { Features.Seams.Info = "seam squish failed: " + e.Message; }
             }
 
             mesh.vertices = result;
@@ -931,6 +958,13 @@ namespace VRoidPlus
             return new BulgeFrame { Center = center, Forward = forward, Right = right, Up = up, Unit = unit };
         }
 
+        /// <summary>A mesh's un-reshaped vertices (our record of its original), or its current ones.</summary>
+        private Vector3[] OriginalOf(Mesh m)
+        {
+            if (m != null && _states.TryGetValue(m.GetInstanceID(), out var st) && st.Mesh == m && st.Original != null) return st.Original;
+            return Copy.Vertices(m);
+        }
+
         private static float Smooth(float x)
         {
             x = Mathf.Clamp01(x);
@@ -966,6 +1000,7 @@ namespace VRoidPlus
         public Dictionary<string, float> Values = new();
         public List<AnchorRule> HairAnchors = new();
         public List<AnchorRule> AccessoryAnchors = new();
+        public List<ClothPhysicsRule> ClothPhysics = new();
         private string _savedJson = "";
         public string Path { get; private set; }
         private object _engine;
@@ -982,12 +1017,13 @@ namespace VRoidPlus
             public Dictionary<string, float> Values = new();
             public List<AnchorRule> HairAnchors = new();
             public List<AnchorRule> AccessoryAnchors = new();
+            public List<ClothPhysicsRule> ClothPhysics = new();
         }
 
         private string Snapshot() => System.Text.Json.JsonSerializer.Serialize(new FileData
         {
             Values = new SortedDictionary<string, float>(Values).ToDictionary(k => k.Key, k => k.Value),
-            HairAnchors = HairAnchors, AccessoryAnchors = AccessoryAnchors,
+            HairAnchors = HairAnchors, AccessoryAnchors = AccessoryAnchors, ClothPhysics = ClothPhysics,
         }, Json.Options);
 
         public bool HasUnsavedChanges => Snapshot() != _savedJson;
@@ -1037,12 +1073,14 @@ namespace VRoidPlus
                 Values = new Dictionary<string, float>();
                 HairAnchors = new List<AnchorRule>();
                 AccessoryAnchors = new List<AnchorRule>();
+                ClothPhysics = new List<ClothPhysicsRule>();
                 if (hasStored)
                 {
                     var data = Json.Read<FileData>(StorePath(path));
                     foreach (var kv in data.Values) Values[kv.Key] = kv.Value;
                     HairAnchors = data.HairAnchors ?? new List<AnchorRule>();
                     AccessoryAnchors = data.AccessoryAnchors ?? new List<AnchorRule>();
+                    ClothPhysics = data.ClothPhysics ?? new List<ClothPhysicsRule>();
                 }
                 _savedJson = Snapshot();
                 Loaded?.Invoke();
@@ -1068,11 +1106,11 @@ namespace VRoidPlus
             if (Path == null) return;
             var file = StorePath(Path);
             var snap = Snapshot();
-            if (Values.Count == 0 && HairAnchors.Count == 0 && AccessoryAnchors.Count == 0 && !System.IO.File.Exists(file)) { _savedJson = snap; return; }
+            if (Values.Count == 0 && HairAnchors.Count == 0 && AccessoryAnchors.Count == 0 && ClothPhysics.Count == 0 && !System.IO.File.Exists(file)) { _savedJson = snap; return; }
             Json.Write(file, new FileData
             {
                 Path = Path, SavedAt = DateTime.Now.ToString("s"), Values = new Dictionary<string, float>(Values),
-                HairAnchors = HairAnchors, AccessoryAnchors = AccessoryAnchors,
+                HairAnchors = HairAnchors, AccessoryAnchors = AccessoryAnchors, ClothPhysics = ClothPhysics,
             });
             _savedJson = snap;
             Plugin.Logger.LogInfo($"VRoid Plus settings saved with {System.IO.Path.GetFileName(Path)}");

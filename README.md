@@ -75,10 +75,14 @@ Every slider goes from 50% to 200%, and sliders acting on the same body part com
 
 **Bulges (stomach, groin)** add a smooth rounded bulge to the front of the body, with Amount, Width, Height, Position (up/down) and, for the stomach, Roundness. Tight clothing on the body follows it.
 
+**Seam squish (underwear, shorts)**: tick tight clothing items; they keep their size while the skin just outside their edges bulges a little and fades back to normal (*Amount*, *Width*). The outline comes from the item's texture transparency; clothing painted onto the body texture isn't supported.
+
 Slider values and anchor choices belong to the open `.vroid` file. They're kept while you edit and stored only when you save the file in VRoid (Save or Save As). Opening another file loads its own settings; a new model starts with none. They're stored in `BepInEx\config\VRoidPlus\models\`, not inside the `.vroid` itself, so they stay on this PC.
 
 ### Physics
 Makes hair, skirts and dresses, bust and other swaying parts flowier or springier: Stiffness (lower = flowier), Damping (lower = bouncier) and Gravity per category, as a percentage of VRoid's own settings. VRoid's collisions stay in place. This currently affects photo mode, where VRoid runs the physics; exports and uploads keep VRoid's own physics. Saved with the `.vroid` file.
+
+**Add physics to clothing** (Physics tab): set a clothing item's type to *Skirt / dress* (a ring of physics chains: more, softer bones than VRoid's), *Shirt hem* (a ring of chains from the hem up to the *Reach* you set, e.g. mid-chest) or *Tie / hanging item* (one chain). Choose chains around, joints per chain and reach. The moving part of the item is re-weighted to the new bones and driven like VRoid's skirt physics, with VRoid's collisions. Works in photo mode; saved with the `.vroid` file.
 
 ### Pose
 - **Show Controller** is switched off each time the pose editor opens. You can turn it on again as usual. You can disable this behaviour in the Pose tab.

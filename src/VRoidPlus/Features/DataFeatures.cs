@@ -193,6 +193,8 @@ namespace VRoidPlus
         }
         public static readonly PoseEditor Pose = new();
         public static readonly PhysicsTuning Physics = new();
+        public static readonly ClothPhysics Cloth = new();
+        public static readonly SeamSquish Seams = new();
 
         public static void Update()
         {
@@ -201,6 +203,7 @@ namespace VRoidPlus
             Safe.Run("HairAnchors", HairAnchors.Update);
             Safe.Run("AccessoryAnchors", AccessoryAnchors.Update);
             Safe.Run("Pose", Pose.Update);
+            Safe.Run("Cloth", Cloth.Update);
             Safe.Run("Physics", Physics.Update);
         }
 

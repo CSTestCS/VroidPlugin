@@ -79,6 +79,7 @@ namespace VRoidPlus
         public bool ShowMoreBodySliders = false;
         public bool ShowThighSquish = false;
         public bool ShowBulges = false;
+        public bool ShowSeams = false;
         public bool ShowDiagnosticsBanner = true;
         public bool FbxLoop = true;
         public bool FbxApplyRootMotion = false;

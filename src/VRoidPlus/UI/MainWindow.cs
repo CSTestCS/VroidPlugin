@@ -270,6 +270,7 @@ namespace VRoidPlus
             Hint("This affects photo mode, where VRoid runs the physics. Exports and VRoid Hub uploads keep VRoid's own physics for now. Saved with the .vroid file.");
             Hint("Status: " + ph.Info);
             if (Ui.Button("Reset physics (if something looks stuck)", 270)) ph.ResetAll();
+            DrawClothPhysics();
             foreach (var (cat, label) in PhysicsTuning.Categories)
             {
                 Header(label);
@@ -286,6 +287,58 @@ namespace VRoidPlus
                     if (!Mathf.Approximately(nv, v)) ph.Set(cat, p, nv);
                 }
             }
+        }
+
+        private float _clothListTime;
+        private List<SkinnedMeshRenderer> _clothList = new();
+
+        private void DrawClothPhysics()
+        {
+            var cloth = Features.Cloth;
+            Header("Add physics to clothing");
+            Hint("Give a skirt or dress more (and softer) physics bones, make a shirt's hem sway, or make a tie hang and swing. The new bones use VRoid's own collisions. Works in photo mode, where VRoid runs the physics. Saved with the .vroid file.");
+            var model = ClothPhysics.PickModel(out var running);
+            if (model == null) { Hint("No model is loaded."); return; }
+            if (!running) Hint("Open photo mode to see it move (items are listed from the editor model).");
+            if (Time.unscaledTime > _clothListTime)
+            {
+                _clothListTime = Time.unscaledTime + 1f;
+                _clothList = model.GetComponentsInChildren<SkinnedMeshRenderer>(true).Where(x => x != null && ClothPhysics.IsClothingCandidate(x)).ToList();
+            }
+            if (_clothList.Count == 0) Hint("No clothing items found.");
+            foreach (var smr in _clothList)
+            {
+                if (smr == null) continue;
+                var meshName = smr.gameObject.name;
+                var rule = cloth.RuleFor(meshName);
+                var kind = rule?.Kind ?? "off";
+                var kindLabel = ClothPhysics.Kinds.First(k => k.Id == kind).Label;
+                Ui.BeginRow(190);
+                Ui.Label(ClothPhysics.Label(smr), Ui.Small);
+                if (Ui.Button("Type: " + kindLabel, 186))
+                {
+                    var idx = Array.FindIndex(ClothPhysics.Kinds, k => k.Id == kind);
+                    cloth.SetRule(meshName, ClothPhysics.Kinds[(idx + 1) % ClothPhysics.Kinds.Length].Id);
+                }
+                Ui.EndRow();
+                if (rule == null) continue;
+                if (rule.Kind != "hanging") rule.Chains = (int)ClothSlider("Chains around", rule.Chains, 4, 24, v => $"{v:F0}", true);
+                rule.Joints = (int)ClothSlider("Joints per chain", rule.Joints, 2, 8, v => $"{v:F0}", true);
+                rule.Reach = ClothSlider(rule.Kind == "hem" ? "Reach (up from hem)" : "Reach (up from bottom)", rule.Reach, 0.1f, 1f, v => $"{v * 100:F0}%", false);
+                if (cloth.Status.TryGetValue(meshName, out var st)) Hint("    " + st);
+            }
+        }
+
+        private float ClothSlider(string label, float v, float min, float max, Func<float, string> fmt, bool whole)
+        {
+            Ui.BeginRow(110);
+            Ui.Label("    " + label, Ui.Wrap, 150);
+            var nv = Ui.Slider(v, min, max);
+            if (whole) nv = Mathf.Round(nv); else nv = Mathf.Round(nv * 100f) / 100f;
+            Ui.Label(fmt(nv), Ui.Wrap, 48);
+            Ui.EndRow();
+            if (!Mathf.Approximately(nv, v)) Features.Cloth.Changed();
+            return nv;
         }
 
         private void DrawHairMerge()
@@ -371,8 +424,55 @@ namespace VRoidPlus
             if (s.ShowBulges) changed |= DrawBulges(body);
 
             Ui.Space(4);
+            var seams = Features.Seams;
+            if (Ui.Button(s.ShowSeams ? "Hide seam squish" : $"Seam squish (underwear, shorts)...{(seams.Active ? " - on" : "")}", 0))
+            { s.ShowSeams = !s.ShowSeams; Settings.Save(); }
+            if (s.ShowSeams) DrawSeams();
+
+            Ui.Space(4);
             if (Ui.Button("Reset all to 100%", 140)) { body.ResetAll(); changed = true; }
             if (changed) body.MarkDirty();
+        }
+
+        private float _seamListTime;
+        private List<SkinnedMeshRenderer> _seamList = new();
+
+        private void DrawSeams()
+        {
+            var seams = Features.Seams;
+            Hint("Tick tight clothing (underwear, shorts...). It keeps its size while the skin just outside its edges bulges a little and fades back to normal. Uses the clothing's own shape from its texture; clothing painted onto the body texture isn't supported.");
+            var model = Avatar.Animator;
+            if (model == null) { Hint("No model is loaded."); return; }
+            if (Time.unscaledTime > _seamListTime)
+            {
+                _seamListTime = Time.unscaledTime + 1f;
+                _seamList = model.GetComponentsInChildren<SkinnedMeshRenderer>(true).Where(x => x != null && ClothPhysics.IsClothingCandidate(x)).ToList();
+            }
+            foreach (var smr in _seamList)
+            {
+                if (smr == null) continue;
+                var n = smr.gameObject.name;
+                var on = seams.IsSelected(n);
+                var nn = Ui.Toggle(on, ClothPhysics.Label(smr));
+                if (nn != on) seams.Select(n, nn);
+            }
+            Ui.BeginRow(110);
+            Ui.Label("Amount", Ui.Wrap, 120);
+            var a = Ui.Slider(seams.Amount, 0f, 1f);
+            Ui.Label($"{seams.Amount * 100:F0}%", Ui.Wrap, 48);
+            if (Ui.Button("Reset", 52)) a = 0f;
+            Ui.EndRow();
+            a = Mathf.Round(a * 100f) / 100f;
+            if (!Mathf.Approximately(a, seams.Amount)) seams.SetAmount(a);
+            Ui.BeginRow(110);
+            Ui.Label("Width", Ui.Wrap, 120);
+            var w = Ui.Slider(seams.WidthSetting, 0f, 1f);
+            Ui.Label($"{seams.WidthMeters * 100:F1}cm", Ui.Wrap, 48);
+            if (Ui.Button("Reset", 52)) w = 0.3f;
+            Ui.EndRow();
+            w = Mathf.Round(w * 100f) / 100f;
+            if (!Mathf.Approximately(w, seams.WidthSetting)) seams.SetWidth(w);
+            if (!string.IsNullOrEmpty(seams.Info)) Hint("    " + seams.Info);
         }
 
         private bool DrawBulges(BodySliders body)
