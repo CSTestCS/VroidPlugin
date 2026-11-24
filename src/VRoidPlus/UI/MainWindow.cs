@@ -269,6 +269,7 @@ namespace VRoidPlus
             Text("Make hair, skirts, dresses and other swaying parts flowier or springier. VRoid's own collisions stay in place. 100% = VRoid's own settings.");
             Hint("This affects photo mode, where VRoid runs the physics. Exports and VRoid Hub uploads keep VRoid's own physics for now. Saved with the .vroid file.");
             Hint("Status: " + ph.Info);
+            if (Ui.Button("Reset physics (if something looks stuck)", 270)) ph.ResetAll();
             foreach (var (cat, label) in PhysicsTuning.Categories)
             {
                 Header(label);

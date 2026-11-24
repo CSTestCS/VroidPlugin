@@ -45,7 +45,25 @@ namespace VRoidPlus
             public string Category;
             public float Stiff, Drag, Gravity;      // VRoid's own values
             public string Applied = "";
+            /// <summary>Every bone the spring moves, with its rotation when we first saw it (its resting shape).</summary>
+            public readonly List<(Transform bone, Quaternion rest)> Rest = new();
         }
+
+        /// <summary>
+        /// Re-initialising a spring (needed for new settings to take effect) makes it treat the bones' current
+        /// rotations as its resting shape. Done mid-swing, that locks the swung-out shape in. So the bones are put
+        /// back to the rotations recorded when the spring first appeared, then the spring is re-initialised.
+        /// </summary>
+        private static void RestoreAndSetup(Spring sp)
+        {
+            foreach (var (bone, rest) in sp.Rest) if (bone != null) bone.localRotation = rest;
+            _setup?.Invoke(sp.Wrapper, new object[] { true });
+        }
+
+        private bool _resetRequested;
+
+        /// <summary>Puts every spring back to its resting shape (in case one got stuck).</summary>
+        public void ResetAll() { _resetRequested = true; _next = 0; }
 
         private readonly Dictionary<int, Spring> _springs = new();
         private float _next;
@@ -57,7 +75,7 @@ namespace VRoidPlus
         public void Update()
         {
             if (Time.unscaledTime < _next) return;
-            _next = Time.unscaledTime + 0.5f;
+            _next = Time.unscaledTime + 0.1f;   // often enough to see new springs before they start swinging
 
             var comps = Compat.FindComponentsByTypeName("VRM.VRMSpringBone, VRM");
             if (comps.Count == 0) { Info = "no spring bones in the scene (physics runs in photo mode)"; return; }
@@ -92,6 +110,7 @@ namespace VRoidPlus
                         Drag = Convert.ToSingle(_pDrag.GetValue(w)),
                         Gravity = Convert.ToSingle(_pGravity.GetValue(w)),
                     };
+                    RecordRest(sp, w);
                     _springs[id] = sp;
                 }
                 perCat[sp.Category] = perCat.TryGetValue(sp.Category, out var n) ? n + 1 : 1;
@@ -104,15 +123,37 @@ namespace VRoidPlus
                     _pStiff.SetValue(sp.Wrapper, sp.Stiff * s);
                     _pDrag.SetValue(sp.Wrapper, Mathf.Clamp01(sp.Drag * dr));
                     _pGravity.SetValue(sp.Wrapper, sp.Gravity * g);
-                    // Re-register so the spring system picks the new values up.
-                    _setup?.Invoke(sp.Wrapper, new object[] { true });
+                    // Re-initialise (from the resting shape) so the spring system picks the new values up.
+                    RestoreAndSetup(sp);
                     sp.Applied = key;
                     changed++;
                 }
                 catch (Exception e) { Info = "couldn't change a spring: " + (e.InnerException ?? e).Message; }
             }
+            if (_resetRequested)
+            {
+                _resetRequested = false;
+                foreach (var sp in _springs.Values) { try { RestoreAndSetup(sp); } catch { } }
+            }
             foreach (var gone in _springs.Keys.Where(k => !alive.Contains(k)).ToList()) _springs.Remove(gone);
             Info = $"{comps.Count} spring bones ({string.Join(", ", perCat.Select(kv => $"{kv.Value} {kv.Key}"))}), {changed} updated just now";
+        }
+
+        private static void RecordRest(Spring sp, object spring)
+        {
+            try
+            {
+                var roots = _pRoots?.GetValue(spring);
+                if (roots == null || !ListAccess.IsList(roots)) return;
+                var seen = new HashSet<int>();
+                for (int i = 0; i < ListAccess.Count(roots); i++)
+                {
+                    if (!(ListAccess.Get(roots, i) is Transform root) || root == null) continue;
+                    foreach (var t in root.GetComponentsInChildren<Transform>(true))
+                        if (t != null && seen.Add(t.GetInstanceID())) sp.Rest.Add((t, t.localRotation));
+                }
+            }
+            catch { }
         }
 
         /// <summary>Category from the names of the bones a spring moves (VRoid names: J_Sec_*Skirt*, HairJoint-*, J_Sec_*Bust*).</summary>
